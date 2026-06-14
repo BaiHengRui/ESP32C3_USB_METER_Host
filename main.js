@@ -7,7 +7,7 @@ const { SerialPort } = require('serialport')
 const APP_NAME = 'ESP32C3-METER 上位机'
 const APP_VERSION = '1.1.4'
 
-// 获取编译时间（使用main.js文件的修改时间，GMT+8）
+// 获取编译时间
 function getBuildTime() {
   try {
     const stats = fs.statSync(__filename)
