@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme, session } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
@@ -55,11 +55,14 @@ let currentTheme = 'system' // 'light', 'dark', 'system'
 // 全局变量
 let mainWindow = null
 let curveWindow = null
+let firmwareWindow = null
 let serialPort = null
 let isReading = false
 let dataBuffer = Buffer.alloc(0)
 let lastPort = ''
 let lastBaudRate = 921600
+
+// 固件更新相关
 
 // 数据解析函数
 function parseUSBCDCData(data) {
@@ -324,6 +327,42 @@ function createCurveWindow() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('curve-window-closed')
     }
+  })
+}
+
+// 创建固件更新窗口
+function createFirmwareWindow() {
+  if (firmwareWindow && !firmwareWindow.isDestroyed()) {
+    firmwareWindow.focus()
+    return
+  }
+
+  firmwareWindow = new BrowserWindow({
+    width: 600,
+    height: 700,
+    minWidth: 500,
+    minHeight: 600,
+    title: '固件更新',
+    center: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+      enableWebSerial: true
+    }
+  })
+
+  firmwareWindow.loadFile('firmware.html')
+
+  // 窗口加载完成后发送当前主题并打开 DevTools
+  firmwareWindow.webContents.on('did-finish-load', () => {
+    firmwareWindow.webContents.send('theme-changed', getCurrentTheme())
+    // 打开 DevTools 用于调试
+    firmwareWindow.webContents.openDevTools({ mode: 'detach' })
+  })
+
+  firmwareWindow.on('closed', () => {
+    firmwareWindow = null
   })
 }
 
@@ -683,6 +722,51 @@ ipcMain.handle('open-curve-window', async () => {
   return { success: true }
 })
 
+ipcMain.handle('open-firmware-window', async () => {
+  // 先关闭主界面的串口连接，释放端口占用
+  if (serialPort && serialPort.isOpen) {
+    console.log('正在关闭主界面串口...')
+    await closeSerialPort()
+    // 等待串口完全关闭
+    await delay(500)
+    console.log('主界面串口已关闭')
+  }
+  
+  createFirmwareWindow()
+  return { success: true }
+})
+
+// 打开固件文件对话框
+ipcMain.handle('open-firmware-dialog', async () => {
+  const result = await dialog.showOpenDialog(firmwareWindow || mainWindow, {
+    title: '选择固件文件',
+    filters: [
+      { name: 'Binary Files', extensions: ['bin'] },
+      { name: 'All Files', extensions: ['*'] }
+    ],
+    properties: ['openFile']
+  })
+  return result
+})
+
+// 读取文件
+ipcMain.handle('read-file', async (event, filePath) => {
+  try {
+    const data = fs.readFileSync(filePath)
+    // 返回 ArrayBuffer
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+  } catch (err) {
+    console.error('读取文件失败:', err)
+    throw err
+  }
+})
+
+// 延迟函数
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ========================================
 ipcMain.handle('save-dialog', async (event, { defaultName, filters }) => {
   const documentsPath = app.getPath('documents')
   const defaultPath = path.normalize(path.join(documentsPath, defaultName))
@@ -1009,6 +1093,23 @@ ipcMain.handle('export-operation-log', async (event, { filePath }) => {
 
 // 应用启动
 app.whenReady().then(() => {
+  // 设置 Web Serial API 权限
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'serial') {
+      callback(true) // 允许 Web Serial API
+    } else {
+      callback(false) // 其他权限默认拒绝
+    }
+  })
+  
+  // 设置设备权限处理器（允许访问串口设备）
+  session.defaultSession.setDevicePermissionHandler((details) => {
+    if (details.deviceType === 'serial') {
+      return true // 允许串口设备访问
+    }
+    return false
+  })
+  
   // 加载配置
   loadConfig()
   addOperationLog('APP', 'START', `应用程序启动，版本=${APP_VERSION}`)

@@ -261,6 +261,15 @@ input[type="range"]::-webkit-slider-thumb {
   background: #e69500;
 }
 
+/* 按钮分隔线 */
+.button-separator {
+  width: 1px;
+  height: 28px;
+  background: var(--border-color);
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+
 .btn-info {
   background: var(--info);
   color: #000;

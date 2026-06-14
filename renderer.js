@@ -30,6 +30,7 @@ const elements = {
   queryInfoBtn: document.getElementById('queryInfoBtn'),
   helpBtn: document.getElementById('helpBtn'),
   resetDefaultsBtn: document.getElementById('resetDefaultsBtn'),
+  openFirmwareBtn: document.getElementById('openFirmwareBtn'),
   openCurveBtn: document.getElementById('openCurveBtn'),
 
   // 自定义命令
@@ -158,6 +159,7 @@ function setupEventListeners() {
   elements.queryInfoBtn.addEventListener('click', () => sendCommand('info'))
   elements.helpBtn.addEventListener('click', () => sendCommand('help'))
   elements.resetDefaultsBtn.addEventListener('click', resetDefaults)
+  elements.openFirmwareBtn.addEventListener('click', openFirmwareWindow)
   elements.openCurveBtn.addEventListener('click', openCurveWindow)
 
   // 自定义命令
@@ -314,6 +316,11 @@ async function resetDefaults() {
 // 打开曲线窗口
 async function openCurveWindow() {
   await window.electronAPI.openCurveWindow()
+}
+
+// 打开固件更新窗口
+async function openFirmwareWindow() {
+  await window.electronAPI.openFirmwareWindow()
 }
 
 // 发送自定义命令

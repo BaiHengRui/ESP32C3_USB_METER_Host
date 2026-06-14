@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 窗口操作
   openCurveWindow: () => ipcRenderer.invoke('open-curve-window'),
+  openFirmwareWindow: () => ipcRenderer.invoke('open-firmware-window'),
 
   // 文件对话框
   saveDialog: (defaultName, filters) => ipcRenderer.invoke('save-dialog', { defaultName, filters }),
@@ -94,5 +95,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 操作日志
   getOperationLogs: () => ipcRenderer.invoke('get-operation-logs'),
-  exportOperationLog: (filePath) => ipcRenderer.invoke('export-operation-log', { filePath })
+  exportOperationLog: (filePath) => ipcRenderer.invoke('export-operation-log', { filePath }),
+
+  // 固件更新
+  openFirmwareDialog: () => ipcRenderer.invoke('open-firmware-dialog'),
+  readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
 })
+
