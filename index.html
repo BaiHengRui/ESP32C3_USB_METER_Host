@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ESP32C3-METER 上位机</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 串口设置 -->
+    <div class="card">
+      <div class="card-header">串口设置</div>
+      <div class="form-row">
+        <label>端口:</label>
+        <select id="portSelect">
+          <option value="">选择端口...</option>
+        </select>
+        <label>波特率:</label>
+        <select id="baudSelect">
+          <option value="9600">9600</option>
+          <option value="19200">19200</option>
+          <option value="38400">38400</option>
+          <option value="57600">57600</option>
+          <option value="115200">115200</option>
+          <option value="921600" selected>921600</option>
+        </select>
+        <button id="togglePortBtn" class="btn btn-success">打开串口</button>
+        <button id="refreshPortsBtn" class="btn btn-secondary">刷新端口</button>
+      </div>
+      <div class="form-row">
+        <div class="status-indicator">
+          <div class="status-dot" id="statusDot"></div>
+          <span id="statusText">未连接</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 控制区域 -->
+    <div class="card">
+      <div class="card-header">控制区域</div>
+
+      <!-- 亮度设置 -->
+      <div class="form-row">
+        <label>屏幕亮度:</label>
+        <input type="range" id="brightnessRange" min="1" max="100" value="50">
+        <div class="number-input">
+          <button id="brightnessMinus" class="number-btn">-</button>
+          <input type="number" id="brightnessInput" min="1" max="100" value="50">
+          <button id="brightnessPlus" class="number-btn">+</button>
+        </div>
+        <button id="setBrightnessBtn" class="btn btn-primary">设置亮度</button>
+      </div>
+
+      <!-- 屏幕方向 -->
+      <div class="form-row">
+        <label>屏幕方向:</label>
+        <select id="rotationSelect">
+          <option value="1">按键朝下</option>
+          <option value="3" selected>按键朝上</option>
+        </select>
+        <button id="setRotationBtn" class="btn btn-primary">设置方向</button>
+      </div>
+
+      <!-- 采样率 -->
+      <div class="form-row">
+        <label>采样率:</label>
+        <select id="sampleRateSelect">
+          <option value="0">快速</option>
+          <option value="1" selected>默认</option>
+          <option value="2">慢速</option>
+        </select>
+        <button id="setSampleRateBtn" class="btn btn-primary">设置采样率</button>
+      </div>
+
+      <!-- 常用命令 -->
+      <div class="form-row">
+        <button id="queryInfoBtn" class="btn btn-secondary">查询信息</button>
+        <button id="helpBtn" class="btn btn-secondary">帮助</button>
+        <button id="resetDefaultsBtn" class="btn btn-warning">恢复默认设置</button>
+        <button id="openCurveBtn" class="btn btn-info">曲线界面</button>
+      </div>
+
+      <!-- 自定义命令 -->
+      <div class="form-row">
+        <input type="text" id="customCmdInput" placeholder="输入自定义命令..." style="flex: 1;">
+        <button id="sendCustomBtn" class="btn btn-primary">发送</button>
+      </div>
+    </div>
+
+    <!-- 串口接收 -->
+    <div class="card">
+      <div class="card-header">串口接收</div>
+      <div class="form-row">
+        <div class="checkbox-group">
+          <input type="checkbox" id="autoScrollCheck" checked>
+          <label for="autoScrollCheck">自动滚屏</label>
+        </div>
+        <button id="clearLogBtn" class="btn btn-danger" style="margin-left: auto;">清空</button>
+        <button id="saveLogBtn" class="btn btn-secondary">保存串口内容</button>
+      </div>
+      <div id="logArea" class="log-area"></div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>实时数据曲线</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="./node_modules/html2canvas/dist/html2canvas.min.js"></script>
+  <script src="./node_modules/chart.js/dist/chart.umd.js"></script>
+  <script src="./node_modules/chartjs-plugin-zoom/dist/chartjs-plugin-zoom.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      padding: 10px;
+      overflow: hidden;
+      height: 100vh;
+    }
+    .main-container {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 10px;
+      height: calc(100vh - 20px);
+    }
+    .chart-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    .main-chart-container {
+      flex: 3;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      padding: 8px;
+      min-height: 200px;
+      position: relative;
+    }
+    .overview-chart-container {
+      flex: 1;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      padding: 8px;
+      min-height: 100px;
+      position: relative;
+    }
+    .side-panel {
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      padding: 15px;
+      overflow-y: auto;
+    }
+    .panel-section {
+      margin-bottom: 15px;
+    }
+    .panel-section h3 {
+      font-size: 14px;
+      color: var(--accent-blue);
+      margin-bottom: 10px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .data-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 0;
+      font-size: 13px;
+    }
+    .data-row .label {
+      color: var(--text-secondary);
+    }
+    .data-row .value {
+      font-family: 'Consolas', monospace;
+      font-weight: 600;
+    }
+    .control-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .hex-display {
+      font-size: 10px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .chart-legend-row {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      margin-bottom: 10px;
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      flex-wrap: wrap;
+    }
+    .legend-inline {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+    .legend-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--border-color);
+      margin: 0 15px;
+    }
+    canvas {
+      max-width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div class="main-container">
+    <!-- 图表区域 -->
+    <div class="chart-section">
+      <!-- 控制栏 -->
+      <div class="card" style="margin-bottom: 0;">
+        <div class="control-row">
+          <label>采样间隔:</label>
+          <select id="intervalSelect">
+            <option value="50">50ms</option>
+            <option value="100">100ms</option>
+            <option value="200" selected>200ms</option>
+            <option value="500">500ms</option>
+            <option value="1000">1000ms</option>
+          </select>
+          <button id="toggleStreamBtn" class="btn btn-success">开始采集</button>
+          <button id="clearDataBtn" class="btn btn-warning">清空数据</button>
+          <button id="resetViewBtn" class="btn btn-info">重置视图</button>
+          <button id="saveDataBtn" class="btn btn-secondary">保存数据</button>
+          <button id="saveImageBtn" class="btn btn-secondary">保存曲线为PNG</button>
+          <span id="statusLabel" style="margin-left: 20px; color: var(--text-secondary);">状态: 待机</span>
+        </div>
+      </div>
+
+      <!-- 图例与选项 -->
+      <div class="chart-legend-row">
+        <div class="legend-inline">
+          <span class="legend-item"><span class="legend-color" style="background:#3ddc84"></span>电压</span>
+          <span class="legend-item"><span class="legend-color" style="background:#ff69b4"></span>电流</span>
+          <span class="legend-item"><span class="legend-color" style="background:#ff9800"></span>功率</span>
+          <span class="legend-item"><span class="legend-color" style="background:#9c27b0"></span>温度</span>
+          <span class="legend-item"><span class="legend-color" style="background:#00bcd4"></span>mAh</span>
+          <span class="legend-item"><span class="legend-color" style="background:#ff5722"></span>mWh</span>
+        </div>
+        <div class="legend-divider"></div>
+        <div class="checkbox-group">
+          <input type="checkbox" id="showTempCheck">
+          <label for="showTempCheck">显示温度</label>
+        </div>
+        <div class="checkbox-group">
+          <input type="checkbox" id="showMahCheck">
+          <label for="showMahCheck">显示 mAh</label>
+        </div>
+        <div class="checkbox-group">
+          <input type="checkbox" id="showMwhCheck">
+          <label for="showMwhCheck">显示 mWh</label>
+        </div>
+      </div>
+
+      <!-- 主曲线 -->
+      <div class="main-chart-container">
+        <canvas id="mainChart"></canvas>
+      </div>
+
+      <!-- 总览曲线 -->
+      <div class="overview-chart-container">
+        <canvas id="overviewChart"></canvas>
+      </div>
+    </div>
+
+    <!-- 侧边数据面板 -->
+    <div class="side-panel">
+      <!-- 实时数据 -->
+      <div class="panel-section">
+        <h3>实时数据</h3>
+        <div class="data-row">
+          <span class="label">电压:</span>
+          <span class="value text-green" id="voltageLabel">0.0000 V</span>
+        </div>
+        <div class="data-row">
+          <span class="label">电流:</span>
+          <span class="value text-pink" id="currentLabel">0.0000 A</span>
+        </div>
+        <div class="data-row">
+          <span class="label">功率:</span>
+          <span class="value text-orange" id="powerLabel">0.0000 W</span>
+        </div>
+        <div class="data-row">
+          <span class="label">温度:</span>
+          <span class="value text-purple" id="tempLabel">0.00 °C</span>
+        </div>
+      </div>
+
+      <!-- 累计数据 -->
+      <div class="panel-section">
+        <h3>累计数据</h3>
+        <div class="data-row">
+          <span class="label">能量:</span>
+          <span class="value" id="whLabel">0.0000 Wh</span>
+        </div>
+        <div class="data-row">
+          <span class="label">容量:</span>
+          <span class="value" id="ahLabel">0.0000 Ah</span>
+        </div>
+        <div class="data-row">
+          <span class="label">能量:</span>
+          <span class="value text-cyan" id="mwhLabel">0.0000 mWh</span>
+        </div>
+        <div class="data-row">
+          <span class="label">容量:</span>
+          <span class="value text-blue" id="mahLabel">0.0000 mAh</span>
+        </div>
+      </div>
+
+      <!-- 状态信息 -->
+      <div class="panel-section">
+        <h3>状态信息</h3>
+        <div class="data-row">
+          <span class="label">状态:</span>
+          <span class="value" id="directionLabel">待机</span>
+        </div>
+        <div class="data-row">
+          <span class="label">数据点:</span>
+          <span class="value" id="countLabel">0</span>
+        </div>
+      </div>
+
+      <!-- 原始数据 HEX -->
+      <div class="panel-section">
+        <h3>原始数据</h3>
+        <div class="hex-display" id="hexDisplay">等待开始采集...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 曲线窗口逻辑
+    const MAX_POINTS = 500
+
+    // 数据存储
+    const dataStore = {
+      timeData: [],
+      timeMsData: [],
+      voltageData: [],
+      currentData: [],
+      powerData: [],
+      temperatureData: [],
+      energyMWhData: [],
+      chargeMAhData: []
+    }
+
+    // 状态变量
+    let isStreaming = false
+    let streamInterval = null
+
+    // DOM 元素
+    const elements = {
+      intervalSelect: document.getElementById('intervalSelect'),
+      toggleStreamBtn: document.getElementById('toggleStreamBtn'),
+      clearDataBtn: document.getElementById('clearDataBtn'),
+      resetViewBtn: document.getElementById('resetViewBtn'),
+      saveDataBtn: document.getElementById('saveDataBtn'),
+      saveImageBtn: document.getElementById('saveImageBtn'),
+      showTempCheck: document.getElementById('showTempCheck'),
+      showMahCheck: document.getElementById('showMahCheck'),
+      showMwhCheck: document.getElementById('showMwhCheck'),
+      statusLabel: document.getElementById('statusLabel'),
+      voltageLabel: document.getElementById('voltageLabel'),
+      currentLabel: document.getElementById('currentLabel'),
+      powerLabel: document.getElementById('powerLabel'),
+      tempLabel: document.getElementById('tempLabel'),
+      whLabel: document.getElementById('whLabel'),
+      ahLabel: document.getElementById('ahLabel'),
+      mwhLabel: document.getElementById('mwhLabel'),
+      mahLabel: document.getElementById('mahLabel'),
+      directionLabel: document.getElementById('directionLabel'),
+      countLabel: document.getElementById('countLabel'),
+      hexDisplay: document.getElementById('hexDisplay')
+    }
+
+    // 图表配置 - 实心数据点
+    const chartConfig = {
+      voltage: { color: '#00FF00', label: '电压 (V)' },
+      current: { color: '#FF6699', label: '电流 (A)' },
+      power: { color: '#E09900', label: '功率 (W)' },
+      temperature: { color: '#9932CC', label: '温度 (°C)' },
+      chargeMAh: { color: '#00BFFF', label: 'mAh' },
+      energyMWh: { color: '#FF6347', label: 'mWh' }
+    }
+
+    // 创建主图表
+    const mainCtx = document.getElementById('mainChart').getContext('2d')
+    const mainChart = new Chart(mainCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: chartConfig.voltage.label,
+            data: [],
+            borderColor: chartConfig.voltage.color,
+            backgroundColor: chartConfig.voltage.color,
+            pointBackgroundColor: chartConfig.voltage.color,
+            pointBorderColor: chartConfig.voltage.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y'
+          },
+          {
+            label: chartConfig.current.label,
+            data: [],
+            borderColor: chartConfig.current.color,
+            backgroundColor: chartConfig.current.color,
+            pointBackgroundColor: chartConfig.current.color,
+            pointBorderColor: chartConfig.current.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y1'
+          },
+          {
+            label: chartConfig.power.label,
+            data: [],
+            borderColor: chartConfig.power.color,
+            backgroundColor: chartConfig.power.color,
+            pointBackgroundColor: chartConfig.power.color,
+            pointBorderColor: chartConfig.power.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y2'
+          },
+          {
+            label: chartConfig.temperature.label,
+            data: [],
+            borderColor: chartConfig.temperature.color,
+            backgroundColor: chartConfig.temperature.color,
+            pointBackgroundColor: chartConfig.temperature.color,
+            pointBorderColor: chartConfig.temperature.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y3',
+            hidden: true
+          },
+          {
+            label: chartConfig.chargeMAh.label,
+            data: [],
+            borderColor: chartConfig.chargeMAh.color,
+            backgroundColor: chartConfig.chargeMAh.color,
+            pointBackgroundColor: chartConfig.chargeMAh.color,
+            pointBorderColor: chartConfig.chargeMAh.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y4',
+            hidden: true
+          },
+          {
+            label: chartConfig.energyMWh.label,
+            data: [],
+            borderColor: chartConfig.energyMWh.color,
+            backgroundColor: chartConfig.energyMWh.color,
+            pointBackgroundColor: chartConfig.energyMWh.color,
+            pointBorderColor: chartConfig.energyMWh.color,
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+            tension: 0.1,
+            yAxisID: 'y5',
+            hidden: true
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        resizeDelay: 100,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1a1a2e',
+            titleColor: '#00d9ff',
+            bodyColor: '#eaeaea',
+            borderColor: '#0066CC',
+            borderWidth: 1
+          },
+          zoom: {
+            limits: {
+              x: { min: 'original', max: 'original' },
+              y: { min: 'original', max: 'original' }
+            },
+            pan: {
+              enabled: true,
+              mode: 'x',
+              modifierKey: null
+            },
+            zoom: {
+              wheel: {
+                enabled: true,
+                speed: 0.1
+              },
+              pinch: {
+                enabled: true
+              },
+              mode: 'x'
+            }
+          }
+        },
+        scales: {
+          x: {
+            display: true,
+            title: { display: true, text: '时间 (s)', color: '#a0a0a0' },
+            ticks: { color: '#a0a0a0', maxTicksLimit: 15 },
+            grid: { color: 'rgba(255,255,255,0.1)' }
+          },
+          y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            title: { display: true, text: '电压 (V)', color: chartConfig.voltage.color },
+            ticks: { color: chartConfig.voltage.color },
+            grid: { color: 'rgba(255,255,255,0.1)' }
+          },
+          y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            title: { display: true, text: '电流 (A)', color: chartConfig.current.color },
+            ticks: { color: chartConfig.current.color },
+            grid: { drawOnChartArea: false }
+          },
+          y2: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            offset: true,
+            title: { display: true, text: '功率 (W)', color: chartConfig.power.color },
+            ticks: { color: chartConfig.power.color },
+            grid: { drawOnChartArea: false }
+          },
+          y3: {
+            type: 'linear',
+            display: false,
+            position: 'right',
+            title: { display: true, text: '温度 (°C)', color: chartConfig.temperature.color },
+            ticks: { color: chartConfig.temperature.color },
+            grid: { drawOnChartArea: false }
+          },
+          y4: {
+            type: 'linear',
+            display: false,
+            position: 'right',
+            title: { display: true, text: 'mAh', color: chartConfig.chargeMAh.color },
+            ticks: { color: chartConfig.chargeMAh.color },
+            grid: { drawOnChartArea: false }
+          },
+          y5: {
+            type: 'linear',
+            display: false,
+            position: 'right',
+            title: { display: true, text: 'mWh', color: chartConfig.energyMWh.color },
+            ticks: { color: chartConfig.energyMWh.color },
+            grid: { drawOnChartArea: false }
+          }
+        }
+      }
+    })
+
+    // 创建总览图表
+    const overviewCtx = document.getElementById('overviewChart').getContext('2d')
+    const overviewChart = new Chart(overviewCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: '电压',
+            data: [],
+            borderColor: chartConfig.voltage.color,
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            tension: 0.1,
+            pointRadius: 0
+          },
+          {
+            label: '电流',
+            data: [],
+            borderColor: chartConfig.current.color,
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            tension: 0.1,
+            pointRadius: 0
+          },
+          {
+            label: '功率',
+            data: [],
+            borderColor: chartConfig.power.color,
+            backgroundColor: 'transparent',
+            borderWidth: 1.5,
+            tension: 0.1,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          x: {
+            display: true,
+            ticks: { color: '#a0a0a0', maxTicksLimit: 15 },
+            grid: { color: 'rgba(255,255,255,0.1)' }
+          },
+          y: {
+            display: true,
+            ticks: { color: '#a0a0a0' },
+            grid: { color: 'rgba(255,255,255,0.1)' }
+          }
+        }
+      }
+    })
+
+    // 更新图表数据
+    function updateCharts(data) {
+      const timeSeconds = data.timeMs / 1000.0
+
+      // 添加数据
+      dataStore.timeData.push(timeSeconds)
+      dataStore.timeMsData.push(data.timeMs)
+      dataStore.voltageData.push(data.voltage)
+      dataStore.currentData.push(data.current)
+      dataStore.powerData.push(data.power)
+      dataStore.temperatureData.push(data.temperature)
+      dataStore.energyMWhData.push(data.energyMWh)
+      dataStore.chargeMAhData.push(data.chargeMAh)
+
+      // 限制数据点数量
+      if (dataStore.timeData.length > MAX_POINTS) {
+        dataStore.timeData.shift()
+        dataStore.timeMsData.shift()
+        dataStore.voltageData.shift()
+        dataStore.currentData.shift()
+        dataStore.powerData.shift()
+        dataStore.temperatureData.shift()
+        dataStore.energyMWhData.shift()
+        dataStore.chargeMAhData.shift()
+      }
+
+      // 更新主图表
+      mainChart.data.labels = dataStore.timeData.map(t => t.toFixed(2))
+      mainChart.data.datasets[0].data = dataStore.voltageData
+      mainChart.data.datasets[1].data = dataStore.currentData
+      mainChart.data.datasets[2].data = dataStore.powerData
+      mainChart.data.datasets[3].data = dataStore.temperatureData
+      mainChart.data.datasets[4].data = dataStore.chargeMAhData
+      mainChart.data.datasets[5].data = dataStore.energyMWhData
+
+      // 更新总览图表
+      overviewChart.data.labels = mainChart.data.labels
+      overviewChart.data.datasets[0].data = dataStore.voltageData
+      overviewChart.data.datasets[1].data = dataStore.currentData
+      overviewChart.data.datasets[2].data = dataStore.powerData
+
+      // 刷新图表
+      mainChart.update('none')
+      overviewChart.update('none')
+
+      // 更新数据显示
+      updateDataLabels(data)
+    }
+
+    // 更新数据标签
+    function updateDataLabels(data) {
+      elements.voltageLabel.textContent = data.voltage.toFixed(4) + ' V'
+      elements.currentLabel.textContent = data.current.toFixed(4) + ' A'
+      elements.powerLabel.textContent = data.power.toFixed(4) + ' W'
+      elements.tempLabel.textContent = data.temperature.toFixed(2) + ' °C'
+      elements.whLabel.textContent = (data.energyMWh / 1000).toFixed(4) + ' Wh'
+      elements.ahLabel.textContent = (data.chargeMAh / 1000).toFixed(4) + ' Ah'
+      elements.mwhLabel.textContent = data.energyMWh.toFixed(4) + ' mWh'
+      elements.mahLabel.textContent = data.chargeMAh.toFixed(4) + ' mAh'
+      elements.directionLabel.textContent = data.currentDirection ? '充电' : '放电'
+      elements.countLabel.textContent = dataStore.timeData.length
+    }
+
+    // 更新 HEX 显示
+    function updateHexDisplay(data) {
+      let hexStr = `时间: ${data.timeMs} ms\n`
+      hexStr += `电压: ${data.voltage.toFixed(4)} V\n`
+      hexStr += `电流: ${data.current.toFixed(4)} A\n`
+      hexStr += `功率: ${data.power.toFixed(4)} W\n`
+      hexStr += `温度: ${data.temperature.toFixed(2)} °C\n`
+      hexStr += `mWh: ${data.energyMWh.toFixed(4)}\n`
+      hexStr += `mAh: ${data.chargeMAh.toFixed(4)}`
+      elements.hexDisplay.textContent = hexStr
+    }
+
+    // 切换数据采集
+    async function toggleStream() {
+      if (isStreaming) {
+        stopStreaming()
+      } else {
+        await startStreaming()
+      }
+    }
+
+    // 开始采集
+    async function startStreaming() {
+      // 检查串口是否已连接
+      const isOpen = await window.electronAPI.isPortOpen()
+      if (!isOpen) {
+        alert('请先在主界面打开串口！')
+        return
+      }
+
+      isStreaming = true
+      elements.toggleStreamBtn.textContent = '停止采集'
+      elements.toggleStreamBtn.className = 'btn btn-danger'
+      elements.statusLabel.textContent = '状态: 采集中...'
+
+      const interval = parseInt(elements.intervalSelect.value)
+
+      streamInterval = setInterval(async () => {
+        try {
+          await window.electronAPI.requestData()
+        } catch (err) {
+          console.error('请求数据失败:', err)
+        }
+      }, interval)
+    }
+
+    // 停止采集
+    function stopStreaming() {
+      isStreaming = false
+      if (streamInterval) {
+        clearInterval(streamInterval)
+        streamInterval = null
+      }
+      elements.toggleStreamBtn.textContent = '开始采集'
+      elements.toggleStreamBtn.className = 'btn btn-success'
+      elements.statusLabel.textContent = '状态: 已停止'
+    }
+
+    // 清空数据
+    function clearData() {
+      Object.keys(dataStore).forEach(key => {
+        dataStore[key] = []
+      })
+
+      mainChart.data.labels = []
+      mainChart.data.datasets.forEach(ds => ds.data = [])
+      overviewChart.data.labels = []
+      overviewChart.data.datasets.forEach(ds => ds.data = [])
+
+      mainChart.update('none')
+      overviewChart.update('none')
+
+      elements.countLabel.textContent = '0'
+      elements.hexDisplay.textContent = '等待开始采集...'
+    }
+
+    // 重置视图
+    function resetView() {
+      mainChart.resetZoom()
+      overviewChart.resetZoom()
+    }
+
+    // 保存数据
+    async function saveData() {
+      if (dataStore.timeData.length === 0) {
+        alert('没有数据可保存！')
+        return
+      }
+
+      const now = new Date()
+      const defaultName = `curve_data_${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}.csv`
+
+      const result = await window.electronAPI.saveDialog(defaultName, [
+        { name: 'CSV Files', extensions: ['csv'] },
+        { name: 'All Files', extensions: ['*'] }
+      ])
+
+      if (result.filePath) {
+        let csv = '序号,时间(秒),时间戳(ms),电压(V),电流(A),功率(W),温度(°C),能量(mWh),容量(mAh)\n'
+
+        for (let i = 0; i < dataStore.timeData.length; i++) {
+          csv += `${i + 1},${dataStore.timeData[i].toFixed(3)},${dataStore.timeMsData[i]},`
+          csv += `${dataStore.voltageData[i].toFixed(4)},${dataStore.currentData[i].toFixed(4)},${dataStore.powerData[i].toFixed(4)},`
+          csv += `${dataStore.temperatureData[i].toFixed(2)},${dataStore.energyMWhData[i].toFixed(4)},${dataStore.chargeMAhData[i].toFixed(4)}\n`
+        }
+
+        const saveResult = await window.electronAPI.saveLogFile(result.filePath, '\ufeff' + csv)
+        if (saveResult.success) {
+          alert(`数据已保存至:\n${result.filePath}`)
+        } else {
+          alert(`保存失败: ${saveResult.error}`)
+        }
+      }
+    }
+
+    // 保存整个界面为 PNG 图片
+    async function saveChartAsImage() {
+      try {
+        // 使用 html2canvas 捕获整个页面
+        const canvas = await html2canvas(document.body, {
+          backgroundColor: '#0f0f1a',
+          scale: 2,
+          logging: false,
+          useCORS: true
+        })
+
+        // 转换为数据 URL
+        const dataUrl = canvas.toDataURL('image/png')
+
+        // 打开保存对话框
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+        const result = await window.electronAPI.saveImageDialog(`curve_${timestamp}.png`)
+
+        if (!result.canceled && result.filePath) {
+          const saveResult = await window.electronAPI.saveImageFile(result.filePath, dataUrl)
+          if (saveResult.success) {
+            alert(`曲线图片已保存至:\n${result.filePath}`)
+          } else {
+            alert(`保存失败: ${saveResult.error}`)
+          }
+        }
+      } catch (err) {
+        alert(`保存失败: ${err.message}`)
+      }
+    }
+
+    // 切换曲线显示
+    function toggleDataset(index, visible) {
+      mainChart.data.datasets[index].hidden = !visible
+
+      const yAxisMap = { 3: 'y3', 4: 'y4', 5: 'y5' }
+      if (yAxisMap[index]) {
+        mainChart.options.scales[yAxisMap[index]].display = visible
+      }
+
+      mainChart.update('none')
+    }
+
+    // 设置事件监听
+    elements.toggleStreamBtn.addEventListener('click', toggleStream)
+    elements.clearDataBtn.addEventListener('click', clearData)
+    elements.resetViewBtn.addEventListener('click', resetView)
+    elements.saveDataBtn.addEventListener('click', saveData)
+    elements.saveImageBtn.addEventListener('click', saveChartAsImage)
+
+    elements.showTempCheck.addEventListener('change', (e) => toggleDataset(3, e.target.checked))
+    elements.showMahCheck.addEventListener('change', (e) => toggleDataset(4, e.target.checked))
+    elements.showMwhCheck.addEventListener('change', (e) => toggleDataset(5, e.target.checked))
+
+    // 监听电表数据
+    window.electronAPI.onMeterData((data) => {
+      if (isStreaming) {
+        updateCharts(data)
+        updateHexDisplay(data)
+      }
+    })
+
+    // 监听菜单事件
+    window.electronAPI.onMenuSaveImage(() => {
+      saveChartAsImage()
+    })
+
+    window.electronAPI.onMenuSaveData(() => {
+      saveData()
+    })
+
+    window.electronAPI.onMenuResetView(() => {
+      resetView()
+    })
+
+    // 初始化主题
+    async function initTheme() {
+      const theme = await window.electronAPI.getTheme()
+      applyTheme(theme)
+    }
+
+    function applyTheme(theme) {
+      document.body.classList.remove('theme-light', 'theme-dark')
+      document.body.classList.add(`theme-${theme}`)
+    }
+
+    // 监听主题变化
+    window.electronAPI.onThemeChanged((theme) => {
+      applyTheme(theme)
+    })
+
+    // 启动时初始化主题
+    initTheme()
+  </script>
+</body>
+</html>
