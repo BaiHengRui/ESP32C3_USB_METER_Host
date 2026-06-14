@@ -1,25 +1,8 @@
-# 打包输出文件夹，完全忽略
 dist/
-release/
-build-output/
-
-# 依赖目录，禁止上传
 node_modules/
-
-# 缓存、日志
-node_modules/.cache/
-node_modules/.electron-builder/
-*.log
-.DS_Store
-.vscode/
-.idea/
-
-# 系统文件、临时文件
+*.exe
 *.zip
 *.rar
-*.7z
-*.exe
-*.msi
-*.dmg
-*.deb
-*.rpm
+.vscode/
+node_modules/.cache
+node_modules/.electron-builder
