@@ -90,7 +90,7 @@
     }
     .chart-legend-row {
       display: flex;
-      gap: 15px;
+      justify-content: space-between;
       align-items: center;
       margin-bottom: 10px;
       padding: 8px 12px;
@@ -103,6 +103,25 @@
       gap: 12px;
       align-items: center;
       flex-wrap: wrap;
+    }
+    .legend-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .checkbox-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .zoom-status-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      white-space: nowrap;
     }
     .legend-item {
       display: flex;
@@ -161,18 +180,24 @@
           <span class="legend-item"><span class="legend-color" style="background:#00bcd4"></span>mAh</span>
           <span class="legend-item"><span class="legend-color" style="background:#ff5722"></span>mWh</span>
         </div>
-        <div class="legend-divider"></div>
-        <div class="checkbox-group">
-          <input type="checkbox" id="showTempCheck">
-          <label for="showTempCheck">显示温度</label>
-        </div>
-        <div class="checkbox-group">
-          <input type="checkbox" id="showMahCheck">
-          <label for="showMahCheck">显示 mAh</label>
-        </div>
-        <div class="checkbox-group">
-          <input type="checkbox" id="showMwhCheck">
-          <label for="showMwhCheck">显示 mWh</label>
+        <div class="legend-actions">
+          <div class="checkbox-group">
+            <input type="checkbox" id="useSystemTimeCheck">
+            <label for="useSystemTimeCheck">使用系统时间</label>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showTempCheck">
+            <label for="showTempCheck">显示温度</label>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showMahCheck">
+            <label for="showMahCheck">显示 mAh</label>
+          </div>
+          <div class="checkbox-group">
+            <input type="checkbox" id="showMwhCheck">
+            <label for="showMwhCheck">显示 mWh</label>
+          </div>
+          <div class="zoom-status-text" id="zoomStatusText">可视区间: 0.00 - 10.00 s</div>
         </div>
       </div>
 
@@ -259,6 +284,7 @@
     // 数据存储
     const dataStore = {
       timeData: [],
+      systemTimeData: [],
       timeMsData: [],
       voltageData: [],
       currentData: [],
@@ -280,9 +306,11 @@
       resetViewBtn: document.getElementById('resetViewBtn'),
       saveDataBtn: document.getElementById('saveDataBtn'),
       saveImageBtn: document.getElementById('saveImageBtn'),
+      useSystemTimeCheck: document.getElementById('useSystemTimeCheck'),
       showTempCheck: document.getElementById('showTempCheck'),
       showMahCheck: document.getElementById('showMahCheck'),
       showMwhCheck: document.getElementById('showMwhCheck'),
+      zoomStatusText: document.getElementById('zoomStatusText'),
       statusLabel: document.getElementById('statusLabel'),
       voltageLabel: document.getElementById('voltageLabel'),
       currentLabel: document.getElementById('currentLabel'),
@@ -307,6 +335,178 @@
       energyMWh: { color: '#FF6347', label: 'mWh' }
     }
 
+    // 交叉准星插件
+    const crosshairPlugin = {
+      id: 'crosshairPlugin',
+      afterDraw(chart, args, options) {
+        const active = chart.getActiveElements()
+        if (!active || active.length === 0) {
+          return
+        }
+
+        const ctx = chart.ctx
+        const { chartArea } = chart
+        const point = active[0].element
+        if (!point) {
+          return
+        }
+
+        const x = point.x
+        const y = point.y
+
+        ctx.save()
+        ctx.strokeStyle = options.color || 'rgba(255, 255, 255, 0.45)'
+        ctx.lineWidth = options.lineWidth || 1
+        ctx.setLineDash(options.dash || [4, 4])
+        ctx.globalAlpha = options.alpha || 0.5
+
+        ctx.beginPath()
+        ctx.moveTo(x, chartArea.top)
+        ctx.lineTo(x, chartArea.bottom)
+        ctx.moveTo(chartArea.left, y)
+        ctx.lineTo(chartArea.right, y)
+        ctx.stroke()
+        ctx.restore()
+      }
+    }
+
+    let userZoomed = false
+
+    function clamp(value, min, max) {
+      return Math.min(Math.max(value, min), max)
+    }
+
+    function syncChartZoom(sourceChart, targetChart) {
+      const sourceScale = sourceChart.scales.x
+      if (!sourceScale) {
+        return
+      }
+      targetChart.options.scales.x.min = sourceScale.min
+      targetChart.options.scales.x.max = sourceScale.max
+      targetChart.update('none')
+      updateZoomStatus()
+    }
+
+    function getVisibleRange(chart) {
+      const scale = chart.scales.x
+      if (!scale) return 10
+      if (scale.max != null && scale.min != null && !Number.isNaN(scale.max) && !Number.isNaN(scale.min)) {
+        return Math.max(0, scale.max - scale.min)
+      }
+      return 10
+    }
+
+    function getTimeDataSource() {
+      return elements.useSystemTimeCheck.checked ? dataStore.systemTimeData : dataStore.timeData
+    }
+
+    function rebuildChartData() {
+      const timeData = getTimeDataSource()
+      const voltagePoints = timeData.map((x, idx) => ({ x, y: dataStore.voltageData[idx] }))
+      const currentPoints = timeData.map((x, idx) => ({ x, y: dataStore.currentData[idx] }))
+      const powerPoints = timeData.map((x, idx) => ({ x, y: dataStore.powerData[idx] }))
+      const temperaturePoints = timeData.map((x, idx) => ({ x, y: dataStore.temperatureData[idx] }))
+      const chargeMAhPoints = timeData.map((x, idx) => ({ x, y: dataStore.chargeMAhData[idx] }))
+      const energyMWhPoints = timeData.map((x, idx) => ({ x, y: dataStore.energyMWhData[idx] }))
+
+      mainChart.data.datasets[0].data = voltagePoints
+      mainChart.data.datasets[1].data = currentPoints
+      mainChart.data.datasets[2].data = powerPoints
+      mainChart.data.datasets[3].data = temperaturePoints
+      mainChart.data.datasets[4].data = chargeMAhPoints
+      mainChart.data.datasets[5].data = energyMWhPoints
+
+      overviewChart.data.datasets[0].data = voltagePoints
+      overviewChart.data.datasets[1].data = currentPoints
+      overviewChart.data.datasets[2].data = powerPoints
+
+      const latestTime = timeData[timeData.length - 1] || 0
+      const currentWindow = mainChart.options.scales.x.max != null && mainChart.options.scales.x.min != null
+        ? mainChart.options.scales.x.max - mainChart.options.scales.x.min
+        : 10
+      const visibleWindow = Math.max(10, currentWindow)
+      const boundedWindow = latestTime > 0 ? Math.min(visibleWindow, latestTime) : visibleWindow
+
+      if (!userZoomed) {
+        if (latestTime <= boundedWindow) {
+          mainChart.options.scales.x.min = 0
+          mainChart.options.scales.x.max = latestTime || boundedWindow
+        } else {
+          mainChart.options.scales.x.min = latestTime - boundedWindow
+          mainChart.options.scales.x.max = latestTime
+        }
+      }
+
+      overviewChart.options.scales.x.min = 0
+      overviewChart.options.scales.x.max = latestTime || 10
+
+      mainChart.update('none')
+      overviewChart.update('none')
+      updateZoomStatus()
+    }
+
+    function updateZoomStatus() {
+      const hasData = mainChart.data.datasets.some(dataset => Array.isArray(dataset.data) && dataset.data.length > 0)
+      if (!hasData) {
+        elements.zoomStatusText.textContent = '可视区间: 0.00 - 10.00 s'
+        return
+      }
+
+      const scale = mainChart.scales?.x
+      const min = scale && Number.isFinite(scale.min) ? scale.min : 0
+      let max = scale && Number.isFinite(scale.max) ? scale.max : null
+      if (max == null || max <= min) {
+        max = min + 10
+      }
+      elements.zoomStatusText.textContent = `可视区间: ${min.toFixed(2)} - ${max.toFixed(2)} s`
+    }
+
+    function chartHasData(chart) {
+      return chart.data.datasets.some(dataset => Array.isArray(dataset.data) && dataset.data.length > 0)
+    }
+
+    function zoomTimeAxis(chart, deltaY, clientX) {
+      if (!chartHasData(chart)) {
+        return
+      }
+      const xScale = chart.scales.x
+      if (!xScale) {
+        return
+      }
+      const rect = chart.canvas.getBoundingClientRect()
+      const mouseX = clientX - rect.left
+      const valueAtPointer = xScale.getValueForPixel(mouseX)
+      const min = xScale.min != null ? xScale.min : xScale.left
+      const max = xScale.max != null ? xScale.max : xScale.right
+      const range = max - min
+      if (range <= 0) {
+        return
+      }
+      const zoomFactor = deltaY > 0 ? 1.15 : 0.85
+      const startRatio = (mouseX - xScale.left) / (xScale.right - xScale.left)
+      const newRange = range * zoomFactor
+      const newMin = valueAtPointer - newRange * startRatio
+      const newMax = valueAtPointer + newRange * (1 - startRatio)
+      const lowest = dataStore.timeData.length > 0 ? dataStore.timeData[0] : 0
+      const highest = dataStore.timeData.length > 0 ? dataStore.timeData[dataStore.timeData.length - 1] : newMax
+      chart.options.scales.x.min = clamp(newMin, lowest, highest - 0.1)
+      chart.options.scales.x.max = clamp(newMax, lowest + 0.1, highest)
+      chart.update('none')
+      userZoomed = true
+    }
+
+    function registerWheelZoom(sourceChart, targetChart) {
+      sourceChart.canvas.addEventListener('wheel', (evt) => {
+        if (!chartHasData(sourceChart)) {
+          evt.preventDefault()
+          return
+        }
+        evt.preventDefault()
+        zoomTimeAxis(sourceChart, evt.deltaY, evt.clientX)
+        syncChartZoom(sourceChart, targetChart)
+      }, { passive: false })
+    }
+
     // 创建主图表
     const mainCtx = document.getElementById('mainChart').getContext('2d')
     const mainChart = new Chart(mainCtx, {
@@ -322,8 +522,8 @@
             pointBackgroundColor: chartConfig.voltage.color,
             pointBorderColor: chartConfig.voltage.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y'
           },
@@ -335,8 +535,8 @@
             pointBackgroundColor: chartConfig.current.color,
             pointBorderColor: chartConfig.current.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y1'
           },
@@ -348,8 +548,8 @@
             pointBackgroundColor: chartConfig.power.color,
             pointBorderColor: chartConfig.power.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y2'
           },
@@ -361,8 +561,8 @@
             pointBackgroundColor: chartConfig.temperature.color,
             pointBorderColor: chartConfig.temperature.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y3',
             hidden: true
@@ -375,8 +575,8 @@
             pointBackgroundColor: chartConfig.chargeMAh.color,
             pointBorderColor: chartConfig.chargeMAh.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y4',
             hidden: true
@@ -389,8 +589,8 @@
             pointBackgroundColor: chartConfig.energyMWh.color,
             pointBorderColor: chartConfig.energyMWh.color,
             borderWidth: 2,
-            pointRadius: 3,
-            pointHoverRadius: 6,
+            pointRadius: 0,
+            pointHoverRadius: 0,
             tension: 0.1,
             yAxisID: 'y5',
             hidden: true
@@ -403,7 +603,8 @@
         animation: { duration: 0 },
         resizeDelay: 100,
         interaction: {
-          mode: 'index',
+          mode: 'nearest',
+          axis: 'x',
           intersect: false
         },
         plugins: {
@@ -427,21 +628,46 @@
             },
             zoom: {
               wheel: {
-                enabled: true,
+                enabled: false,
                 speed: 0.1
               },
               pinch: {
                 enabled: true
               },
-              mode: 'x'
+              mode: 'x',
+              onZoom: ({ chart }) => {
+                userZoomed = true
+              },
+              onZoomComplete: ({ chart }) => {
+                syncChartZoom(chart, overviewChart)
+              }
+            },
+            onPan: ({ chart }) => {
+              userZoomed = true
+            },
+            onPanComplete: ({ chart }) => {
+              syncChartZoom(chart, overviewChart)
             }
+          },
+          crosshairPlugin: {
+            color: 'rgba(255,255,255,0.5)',
+            lineWidth: 1,
+            dash: [4, 4],
+            alpha: 0.45
           }
         },
         scales: {
           x: {
+            type: 'linear',
             display: true,
             title: { display: true, text: '时间 (s)', color: '#a0a0a0' },
-            ticks: { color: '#a0a0a0', maxTicksLimit: 15 },
+            ticks: {
+              color: '#a0a0a0',
+              maxTicksLimit: 15,
+              callback: value => value.toFixed(2)
+            },
+            min: 0,
+            max: 10,
             grid: { color: 'rgba(255,255,255,0.1)' }
           },
           y: {
@@ -494,8 +720,31 @@
             grid: { drawOnChartArea: false }
           }
         }
-      }
+      },
+      plugins: [crosshairPlugin]
     })
+
+    const overviewSelectionPlugin = {
+      id: 'overviewSelectionPlugin',
+      afterDraw(chart) {
+        const mainScale = mainChart.scales.x
+        const overviewScale = chart.scales.x
+        if (!mainScale || !overviewScale || mainScale.min == null || mainScale.max == null) {
+          return
+        }
+
+        const ctx = chart.ctx
+        const left = overviewScale.getPixelForValue(mainScale.min)
+        const right = overviewScale.getPixelForValue(mainScale.max)
+        const top = chart.chartArea.top
+        const bottom = chart.chartArea.bottom
+
+        ctx.save()
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.12)'
+        ctx.fillRect(left, top, right - left, bottom - top)
+        ctx.restore()
+      }
+    }
 
     // 创建总览图表
     const overviewCtx = document.getElementById('overviewChart').getContext('2d')
@@ -537,13 +786,57 @@
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 0 },
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false
+        },
         plugins: {
-          legend: { display: false }
+          legend: { display: false },
+          zoom: {
+            limits: {
+              x: { min: 'original', max: 'original' },
+              y: { min: 'original', max: 'original' }
+            },
+            pan: {
+              enabled: true,
+              mode: 'x',
+              modifierKey: null
+            },
+            zoom: {
+              wheel: {
+                enabled: false,
+                speed: 0.1
+              },
+              pinch: {
+                enabled: true
+              },
+              mode: 'x',
+              onZoom: ({ chart }) => {
+                userZoomed = true
+              },
+              onZoomComplete: ({ chart }) => {
+                syncChartZoom(chart, mainChart)
+              }
+            },
+            onPan: ({ chart }) => {
+              userZoomed = true
+            },
+            onPanComplete: ({ chart }) => {
+              syncChartZoom(chart, mainChart)
+            }
+          }
         },
         scales: {
           x: {
+            type: 'linear',
             display: true,
-            ticks: { color: '#a0a0a0', maxTicksLimit: 15 },
+            title: { display: true, text: '时间 (s)', color: '#a0a0a0' },
+            ticks: {
+              color: '#a0a0a0',
+              maxTicksLimit: 15,
+              callback: value => value.toFixed(2)
+            },
             grid: { color: 'rgba(255,255,255,0.1)' }
           },
           y: {
@@ -552,15 +845,21 @@
             grid: { color: 'rgba(255,255,255,0.1)' }
           }
         }
-      }
+      },
+      plugins: [overviewSelectionPlugin]
     })
+
+    registerWheelZoom(mainChart, overviewChart)
+    registerWheelZoom(overviewChart, mainChart)
 
     // 更新图表数据
     function updateCharts(data) {
       const timeSeconds = data.timeMs / 1000.0
 
       // 添加数据
+      const systemTimeSeconds = Date.now() / 1000
       dataStore.timeData.push(timeSeconds)
+      dataStore.systemTimeData.push(systemTimeSeconds)
       dataStore.timeMsData.push(data.timeMs)
       dataStore.voltageData.push(data.voltage)
       dataStore.currentData.push(data.current)
@@ -572,6 +871,7 @@
       // 限制数据点数量
       if (dataStore.timeData.length > MAX_POINTS) {
         dataStore.timeData.shift()
+        dataStore.systemTimeData.shift()
         dataStore.timeMsData.shift()
         dataStore.voltageData.shift()
         dataStore.currentData.shift()
@@ -581,27 +881,20 @@
         dataStore.chargeMAhData.shift()
       }
 
-      // 更新主图表
-      mainChart.data.labels = dataStore.timeData.map(t => t.toFixed(2))
-      mainChart.data.datasets[0].data = dataStore.voltageData
-      mainChart.data.datasets[1].data = dataStore.currentData
-      mainChart.data.datasets[2].data = dataStore.powerData
-      mainChart.data.datasets[3].data = dataStore.temperatureData
-      mainChart.data.datasets[4].data = dataStore.chargeMAhData
-      mainChart.data.datasets[5].data = dataStore.energyMWhData
-
-      // 更新总览图表
-      overviewChart.data.labels = mainChart.data.labels
-      overviewChart.data.datasets[0].data = dataStore.voltageData
-      overviewChart.data.datasets[1].data = dataStore.currentData
-      overviewChart.data.datasets[2].data = dataStore.powerData
-
-      // 刷新图表
-      mainChart.update('none')
-      overviewChart.update('none')
+      rebuildChartData()
 
       // 更新数据显示
       updateDataLabels(data)
+    }
+
+    // 切换数据采集
+    function toggleStream() {
+      if (isStreaming) {
+        stopStreaming()
+      } else {
+        userZoomed = false
+        startStreaming()
+      }
     }
 
     // 更新数据标签
@@ -682,13 +975,19 @@
         dataStore[key] = []
       })
 
+      userZoomed = false
       mainChart.data.labels = []
       mainChart.data.datasets.forEach(ds => ds.data = [])
       overviewChart.data.labels = []
       overviewChart.data.datasets.forEach(ds => ds.data = [])
+      mainChart.options.scales.x.min = 0
+      mainChart.options.scales.x.max = 10
+      overviewChart.options.scales.x.min = 0
+      overviewChart.options.scales.x.max = 10
 
       mainChart.update('none')
       overviewChart.update('none')
+      updateZoomStatus()
 
       elements.countLabel.textContent = '0'
       elements.hexDisplay.textContent = '等待开始采集...'
@@ -696,8 +995,14 @@
 
     // 重置视图
     function resetView() {
-      mainChart.resetZoom()
-      overviewChart.resetZoom()
+      userZoomed = false
+      mainChart.options.scales.x.min = 0
+      mainChart.options.scales.x.max = 10
+      overviewChart.options.scales.x.min = 0
+      overviewChart.options.scales.x.max = 10
+      mainChart.update('none')
+      overviewChart.update('none')
+      updateZoomStatus()
     }
 
     // 保存数据
@@ -786,6 +1091,10 @@
     elements.showTempCheck.addEventListener('change', (e) => toggleDataset(3, e.target.checked))
     elements.showMahCheck.addEventListener('change', (e) => toggleDataset(4, e.target.checked))
     elements.showMwhCheck.addEventListener('change', (e) => toggleDataset(5, e.target.checked))
+    elements.useSystemTimeCheck.addEventListener('change', () => {
+      userZoomed = false
+      rebuildChartData()
+    })
 
     // 监听电表数据
     window.electronAPI.onMeterData((data) => {

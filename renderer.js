@@ -98,12 +98,17 @@ function applyTheme(theme) {
 async function refreshPorts() {
   try {
     const ports = await window.electronAPI.listPorts()
+    console.log('获取到的串口列表:', ports)
     elements.portSelect.innerHTML = '<option value="">选择端口...</option>'
 
     ports.forEach(port => {
       const option = document.createElement('option')
       option.value = port.path
-      option.textContent = port.path + (port.manufacturer ? ` (${port.manufacturer})` : '')
+      // 标识虚拟串口
+      const virtualTag = port.isVirtual ? ' [虚拟]' : ' [物理]'
+      const manufacturer = port.manufacturer ? ` (${port.manufacturer})` : ''
+      option.textContent = port.path + manufacturer + virtualTag
+      console.log('串口:', port.path, 'isVirtual:', port.isVirtual, '显示:', option.textContent)
       elements.portSelect.appendChild(option)
     })
 

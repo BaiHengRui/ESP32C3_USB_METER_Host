@@ -327,20 +327,134 @@ function createCurveWindow() {
   })
 }
 
+// 判断是否为虚拟串口
+function isVirtualPort(port) {
+  // 虚拟串口软件的常见制造商名称
+  const virtualManufacturers = [
+    'com0com',
+    'Virtual',
+    'VSPD',
+    'Eltima',
+    'HW VSP3',
+    'Virtual Serial',
+    'TightVNC'
+  ]
+
+  // 检查制造商名称
+  if (port.manufacturer) {
+    const manufacturer = port.manufacturer.toLowerCase()
+    for (const vm of virtualManufacturers) {
+      if (manufacturer.includes(vm.toLowerCase())) {
+        return true
+      }
+    }
+  }
+
+  // 如果厂商信息表明是已知的虚拟串口驱动，则视为虚拟串口
+  if (port.manufacturer) {
+    const manufacturer = port.manufacturer.toLowerCase()
+    for (const vm of virtualManufacturers) {
+      if (manufacturer.includes(vm.toLowerCase())) {
+        return true
+      }
+    }
+  }
+
+  // 有 vendorId 和 productId 通常说明这是一个真实的 USB 串口设备，而非软件虚拟端口
+  if (port.vendorId && port.productId) {
+    return false
+  }
+
+  // 如果 pnpId 明确包含 virtual，则可以认为是虚拟串口
+  if (port.pnpId) {
+    const pnpId = port.pnpId.toLowerCase()
+    if (pnpId.includes('virtual')) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// 使用Windows注册表获取串口列表（备用方法）
+function getPortsFromRegistry() {
+  try {
+    const { execSync } = require('child_process')
+    // 使用PowerShell查询注册表获取串口
+    const output = execSync('powershell -Command "Get-ItemProperty -Path \'HKLM:\\HARDWARE\\DEVICEMAP\\SERIALCOMM\\\' 2>$null | Select-Object -Property * -ExcludeProperty PS* | ConvertTo-Json"', {
+      encoding: 'utf8',
+      timeout: 5000
+    })
+    
+    if (!output || output.trim() === '') {
+      return []
+    }
+    
+    const data = JSON.parse(output)
+    const ports = []
+    
+    // 处理单个或多个串口的情况
+    if (Array.isArray(data)) {
+      data.forEach(item => {
+        Object.values(item).forEach(value => {
+          if (typeof value === 'string' && value.startsWith('COM')) {
+            ports.push({
+              path: value,
+              manufacturer: 'Registry',
+              isVirtual: true
+            })
+          }
+        })
+      })
+    } else if (typeof data === 'object') {
+      Object.values(data).forEach(value => {
+        if (typeof value === 'string' && value.startsWith('COM')) {
+          ports.push({
+            path: value,
+            manufacturer: 'Registry',
+            isVirtual: true
+          })
+        }
+      })
+    }
+    
+    return ports
+  } catch (err) {
+    console.error('从注册表获取串口失败:', err.message)
+    return []
+  }
+}
+
 // 获取可用串口列表
 async function listPorts() {
   try {
     const ports = await SerialPort.list()
-    return ports.map(port => ({
+    console.log('SerialPort.list() 返回:', ports)
+    
+    // 如果SerialPort.list()返回空，尝试从注册表获取
+    if (ports.length === 0) {
+      console.log('SerialPort.list()为空，尝试从注册表获取...')
+      const registryPorts = getPortsFromRegistry()
+      console.log('注册表获取的串口:', registryPorts)
+      return registryPorts
+    }
+    
+    const result = ports.map(port => ({
       path: port.path,
       manufacturer: port.manufacturer,
       pnpId: port.pnpId,
       productId: port.productId,
-      vendorId: port.vendorId
+      vendorId: port.vendorId,
+      isVirtual: isVirtualPort(port)
     }))
+    console.log('处理后的串口列表:', result)
+    return result
   } catch (err) {
     console.error('获取串口列表失败:', err)
-    return []
+    // 出错时也尝试从注册表获取
+    const registryPorts = getPortsFromRegistry()
+    console.log('出错后从注册表获取的串口:', registryPorts)
+    return registryPorts
   }
 }
 
