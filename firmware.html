@@ -16,7 +16,7 @@
   <style>
     .firmware-container {
       padding: 20px;
-      max-width: 800px;
+      max-width: 1000px;
       margin: 0 auto;
     }
     
@@ -125,6 +125,49 @@
       width: 90px;
     }
     
+    /* 圆形问号提示框 */
+    .help-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      color: #000;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: help;
+      margin-left: 8px;
+      position: relative;
+    }
+    
+    .help-icon::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.2s, visibility 0.2s;
+      z-index: 100;
+      min-width: 200px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    }
+    
+    .help-icon:hover::after {
+      opacity: 1;
+      visibility: visible;
+    }
+    
     .btn-add-row {
       margin-top: 10px;
       background: var(--accent-blue);
@@ -142,6 +185,7 @@
       border-radius: 4px;
       overflow: hidden;
       border: 1px solid var(--border-color);
+      position: relative;
     }
     
     .progress-fill {
@@ -149,12 +193,21 @@
       background: linear-gradient(90deg, var(--accent-blue), var(--accent-green));
       width: 0%;
       transition: width 0.3s ease;
+    }
+    
+    .progress-percent {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       color: #000;
       font-size: 12px;
       font-weight: 600;
+      pointer-events: none;
     }
     
     .progress-text {
@@ -210,19 +263,19 @@
         <select id="portSelect">
           <option value="">选择端口...</option>
         </select>
-        <button id="refreshPortsBtn" class="btn btn-secondary">刷新</button>
+        <button id="refreshPortsBtn" class="btn btn-secondary">刷新/授权</button>
       </div>
     </div>
 
     <!-- 分区列表 -->
     <div class="section">
-      <div class="section-title">烧录分区</div>
+      <div class="section-title">烧录分区 <span class="help-icon" data-tooltip="常用分区地址说明:&#10;&#10;0x0000 - bootloader.bin (引导程序)&#10;0x8000 - partitions.bin (分区表)&#10;0x10000 - firmware.bin (应用固件)&#10;&#10;请根据实际固件配置修改">?</span></div>
       <table class="partition-table">
         <thead>
           <tr>
             <th style="width: 30px;">#</th>
             <th>固件文件</th>
-            <th>分区地址</th>
+            <th>分区地址(提示)</th>
             <th style="width: 80px;">操作</th>
           </tr>
         </thead>
@@ -236,10 +289,9 @@
               </div>
             </td>
             <td>
-              <input type="text" class="partition-address" value="0x00000">
-              <span class="address-hint">bootloader.bin</span>
+              <input type="text" class="partition-address" value="0x0000">
             </td>
-            <td><button class="btn-remove" disabled>移除</button></td>
+            <td><button class="btn-remove">移除</button></td>
           </tr>
           <tr data-row="1">
             <td>2</td>
@@ -251,9 +303,8 @@
             </td>
             <td>
               <input type="text" class="partition-address" value="0x8000">
-              <span class="address-hint">partitions.bin</span>
             </td>
-            <td><button class="btn-remove" disabled>移除</button></td>
+            <td><button class="btn-remove">移除</button></td>
           </tr>
           <tr data-row="2">
             <td>3</td>
@@ -265,7 +316,6 @@
             </td>
             <td>
               <input type="text" class="partition-address" value="0x10000">
-              <span class="address-hint">firmware.bin</span>
             </td>
             <td><button class="btn-remove">移除</button></td>
           </tr>
@@ -279,7 +329,8 @@
       <div class="section-title">烧录进度</div>
       <div class="progress-container">
         <div class="progress-bar">
-          <div class="progress-fill" id="progressFill">0%</div>
+          <div class="progress-fill" id="progressFill"></div>
+          <div class="progress-percent" id="progressPercent">0%</div>
         </div>
         <div class="progress-text" id="progressText">准备就绪</div>
       </div>

@@ -20,6 +20,7 @@ function getElements() {
     partitionTableBody: document.getElementById('partitionTableBody'),
     addRowBtn: document.getElementById('addRowBtn'),
     progressFill: document.getElementById('progressFill'),
+    progressPercent: document.getElementById('progressPercent'),
     progressText: document.getElementById('progressText'),
     eraseBtn: document.getElementById('eraseBtn'),
     startBtn: document.getElementById('startBtn'),
@@ -56,7 +57,14 @@ const terminal = {
 // 获取端口标识符
 function getPortIdentifier(port) {
   const info = port.getInfo()
-  return info.path || `VID:${info.usbVendorId}-PID:${info.usbProductId}`
+  // 如果有 path，直接返回 path
+  if (info.path) {
+    return info.path
+  }
+  // 否则使用 VID:PID 格式，确保转换为十六进制
+  const vid = info.usbVendorId ? info.usbVendorId.toString(16).padStart(4, '0') : '0000'
+  const pid = info.usbProductId ? info.usbProductId.toString(16).padStart(4, '0') : '0000'
+  return `VID:${vid}-PID:${pid}`
 }
 
 // 初始化
@@ -131,10 +139,23 @@ async function refreshPorts() {
           if (mainWindowPortOpen) {
             appendLog('正在释放主界面占用的串口...')
             await window.electronAPI.closePort()
-            await delay(500)
+            // 增加延迟时间，确保串口完全关闭
+            await delay(1000)
+            // 验证串口是否已关闭
+            let retryCount = 0
+            while (retryCount < 5) {
+              const stillOpen = await window.electronAPI.isPortOpen()
+              if (!stillOpen) {
+                appendLog('主界面串口已成功释放')
+                break
+              }
+              appendLog(`等待串口关闭... (${retryCount + 1}/5)`)
+              await delay(500)
+              retryCount++
+            }
           }
         } catch (e) {
-          // 忽略
+          appendLog('释放主界面串口时出错: ' + e.message)
         }
         
         const selectedPort = await navigator.serial.requestPort()
@@ -165,12 +186,14 @@ async function refreshPorts() {
       // 尝试获取友好显示名称
       let displayText = identifier
       if (vid && pid) {
-        const vidDecimal = parseInt(vid, 10)
-        const pidDecimal = parseInt(pid, 10)
+        // 将 Web Serial 的 VID/PID 转换为十六进制字符串进行比较
+        const vidHex = vid.toString(16).toLowerCase().padStart(4, '0')
+        const pidHex = pid.toString(16).toLowerCase().padStart(4, '0')
+        
         const matchedPort = systemPorts.find(p => {
-          const pVid = p.vendorId ? parseInt(p.vendorId, 16) : null
-          const pPid = p.productId ? parseInt(p.productId, 16) : null
-          return pVid === vidDecimal && pPid === pidDecimal
+          const pVid = p.vendorId ? p.vendorId.toLowerCase() : null
+          const pPid = p.productId ? p.productId.toLowerCase() : null
+          return pVid === vidHex && pPid === pidHex
         })
         if (matchedPort) {
           displayText = matchedPort.path
@@ -261,14 +284,23 @@ function addPartitionRow(address = '0x00000', hint = '') {
     return
   }
 
-  const rowIndex = rows.length + 1
-  const newRow = document.createElement('tr')
-  newRow.setAttribute('data-row', rowIndex - 1)
+  // 获取当前最大的 data-row 索引
+  let maxRowIndex = -1
+  rows.forEach(row => {
+    const idx = parseInt(row.getAttribute('data-row'))
+    if (!isNaN(idx) && idx > maxRowIndex) {
+      maxRowIndex = idx
+    }
+  })
   
-  const hintHtml = hint ? `<span class="address-hint">${hint}</span>` : ''
+  const newRowIndex = maxRowIndex + 1
+  const displayIndex = rows.length + 1
+  
+  const newRow = document.createElement('tr')
+  newRow.setAttribute('data-row', newRowIndex)
   
   newRow.innerHTML = `
-    <td>${rowIndex}</td>
+    <td>${displayIndex}</td>
     <td>
       <div class="file-selector">
         <input type="text" class="firmware-file" readonly placeholder="选择固件...">
@@ -277,7 +309,6 @@ function addPartitionRow(address = '0x00000', hint = '') {
     </td>
     <td>
       <input type="text" class="partition-address" value="${address}">
-      ${hintHtml}
     </td>
     <td><button class="btn-remove">移除</button></td>
   `
@@ -311,6 +342,7 @@ function updateRemoveButtons() {
   const rows = elements.partitionTableBody.querySelectorAll('tr')
   const removeButtons = elements.partitionTableBody.querySelectorAll('.btn-remove')
   removeButtons.forEach((btn, index) => {
+    // 至少保留一行
     btn.disabled = rows.length <= 1
   })
 }
@@ -406,7 +438,7 @@ async function startFlashing() {
   browseButtons.forEach(btn => btn.disabled = true)
   
   elements.progressFill.style.width = '0%'
-  elements.progressFill.textContent = '0%'
+  elements.progressPercent.textContent = '0%'
   elements.progressText.textContent = '准备烧录...'
   
   appendLog('开始烧录...')
@@ -420,10 +452,23 @@ async function startFlashing() {
       if (mainWindowPortOpen) {
         appendLog('正在释放主界面占用的串口...')
         await window.electronAPI.closePort()
-        await delay(500)
+        // 增加延迟时间，确保串口完全关闭
+        await delay(1000)
+        // 验证串口是否已关闭
+        let retryCount = 0
+        while (retryCount < 5) {
+          const stillOpen = await window.electronAPI.isPortOpen()
+          if (!stillOpen) {
+            appendLog('主界面串口已成功释放')
+            break
+          }
+          appendLog(`等待串口关闭... (${retryCount + 1}/5)`)
+          await delay(500)
+          retryCount++
+        }
       }
     } catch (e) {
-      // 忽略
+      appendLog('释放主界面串口时出错: ' + e.message)
     }
     
     // 创建 Transport 对象（esptool-js 会自动打开端口）
@@ -569,10 +614,23 @@ async function eraseFlash() {
       if (mainWindowPortOpen) {
         appendLog('正在释放主界面占用的串口...')
         await window.electronAPI.closePort()
-        await delay(500)
+        // 增加延迟时间，确保串口完全关闭
+        await delay(1000)
+        // 验证串口是否已关闭
+        let retryCount = 0
+        while (retryCount < 5) {
+          const stillOpen = await window.electronAPI.isPortOpen()
+          if (!stillOpen) {
+            appendLog('主界面串口已成功释放')
+            break
+          }
+          appendLog(`等待串口关闭... (${retryCount + 1}/5)`)
+          await delay(500)
+          retryCount++
+        }
       }
     } catch (e) {
-      // 忽略
+      appendLog('释放主界面串口时出错: ' + e.message)
     }
     
     // 创建 Transport 对象（esptool-js 会自动打开端口）
@@ -639,7 +697,7 @@ function flashComplete(success, message) {
 // 更新进度
 function updateProgress(percent, message) {
   elements.progressFill.style.width = `${percent}%`
-  elements.progressFill.textContent = `${Math.floor(percent)}%`
+  elements.progressPercent.textContent = `${Math.floor(percent)}%`
   elements.progressText.textContent = message
 }
 

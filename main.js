@@ -338,7 +338,7 @@ function createFirmwareWindow() {
   }
 
   firmwareWindow = new BrowserWindow({
-    width: 600,
+    width: 800,
     height: 700,
     minWidth: 500,
     minHeight: 600,
@@ -354,11 +354,9 @@ function createFirmwareWindow() {
 
   firmwareWindow.loadFile('firmware.html')
 
-  // 窗口加载完成后发送当前主题并打开 DevTools
+  // 窗口加载完成后发送当前主题
   firmwareWindow.webContents.on('did-finish-load', () => {
     firmwareWindow.webContents.send('theme-changed', getCurrentTheme())
-    // 打开 DevTools 用于调试
-    firmwareWindow.webContents.openDevTools({ mode: 'detach' })
   })
 
   firmwareWindow.on('closed', () => {
@@ -415,7 +413,8 @@ function isVirtualPort(port) {
   return false
 }
 
-// 使用Windows注册表获取串口列表（备用方法）
+// 使用Windows注册表获取串口列表（备用方法）- 已注释
+/*
 function getPortsFromRegistry() {
   try {
     const { execSync } = require('child_process')
@@ -463,6 +462,7 @@ function getPortsFromRegistry() {
     return []
   }
 }
+*/
 
 // 获取可用串口列表
 async function listPorts() {
@@ -470,12 +470,10 @@ async function listPorts() {
     const ports = await SerialPort.list()
     console.log('SerialPort.list() 返回:', ports)
     
-    // 如果SerialPort.list()返回空，尝试从注册表获取
+    // 如果SerialPort.list()返回空，返回空数组（已移除注册表获取方式）
     if (ports.length === 0) {
-      console.log('SerialPort.list()为空，尝试从注册表获取...')
-      const registryPorts = getPortsFromRegistry()
-      console.log('注册表获取的串口:', registryPorts)
-      return registryPorts
+      console.log('SerialPort.list()为空')
+      return []
     }
     
     const result = ports.map(port => ({
@@ -490,10 +488,8 @@ async function listPorts() {
     return result
   } catch (err) {
     console.error('获取串口列表失败:', err)
-    // 出错时也尝试从注册表获取
-    const registryPorts = getPortsFromRegistry()
-    console.log('出错后从注册表获取的串口:', registryPorts)
-    return registryPorts
+    // 出错时返回空数组（已移除注册表获取方式）
+    return []
   }
 }
 
@@ -909,13 +905,30 @@ function createMenu() {
       ]
     },
     {
-      label: '曲线',
+      label: '工具',
       submenu: [
         {
           label: '打开曲线界面',
           accelerator: 'CmdOrCtrl+M',
           click: () => {
             createCurveWindow()
+          }
+        },
+        {
+          type: 'separator'
+        },
+        {
+          label: '固件更新',
+          accelerator: 'CmdOrCtrl+U',
+          click: async () => {
+            // 先关闭主界面的串口连接，释放端口占用
+            if (serialPort && serialPort.isOpen) {
+              console.log('正在关闭主界面串口...')
+              await closeSerialPort()
+              await delay(500)
+              console.log('主界面串口已关闭')
+            }
+            createFirmwareWindow()
           }
         }
       ]
