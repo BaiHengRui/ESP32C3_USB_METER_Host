@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme, session } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
@@ -347,8 +347,7 @@ function createFirmwareWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
-      enableWebSerial: true
+      preload: path.join(__dirname, 'preload.js')
     }
   })
 
@@ -757,6 +756,20 @@ ipcMain.handle('is-port-open', async () => {
   return serialPort && serialPort.isOpen
 })
 
+// 固件更新专用：释放主窗口串口（阻塞式，确保完全释放）
+ipcMain.handle('release-main-port', async () => {
+  if (serialPort && serialPort.isOpen) {
+    console.log('[FIRMWARE] 正在关闭主界面串口...')
+    addOperationLog('SERIAL', 'RELEASE_FOR_FIRMWARE', '固件更新释放串口')
+    await closeSerialPort()
+    // 等待串口完全关闭，给操作系统释放端口的时间
+    await delay(1000)
+    console.log('[FIRMWARE] 主界面串口已关闭')
+    return { success: true, released: true }
+  }
+  return { success: true, released: false }
+})
+
 ipcMain.handle('open-curve-window', async () => {
   createCurveWindow()
   return { success: true }
@@ -765,13 +778,12 @@ ipcMain.handle('open-curve-window', async () => {
 ipcMain.handle('open-firmware-window', async () => {
   // 先关闭主界面的串口连接，释放端口占用
   if (serialPort && serialPort.isOpen) {
-    console.log('正在关闭主界面串口...')
+    console.log('[FIRMWARE] 正在关闭主界面串口...')
     await closeSerialPort()
-    // 等待串口完全关闭
-    await delay(500)
-    console.log('主界面串口已关闭')
+    await delay(1000)
+    console.log('[FIRMWARE] 主界面串口已关闭')
   }
-  
+
   createFirmwareWindow()
   return { success: true }
 })
@@ -805,6 +817,7 @@ ipcMain.handle('read-file', async (event, filePath) => {
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+const sleep = delay
 
 // ========================================
 ipcMain.handle('save-dialog', async (event, { defaultName, filters }) => {
@@ -967,10 +980,10 @@ function createMenu() {
           click: async () => {
             // 先关闭主界面的串口连接，释放端口占用
             if (serialPort && serialPort.isOpen) {
-              console.log('正在关闭主界面串口...')
+              console.log('[FIRMWARE] 正在关闭主界面串口...')
               await closeSerialPort()
-              await delay(500)
-              console.log('主界面串口已关闭')
+              await delay(1000)
+              console.log('[FIRMWARE] 主界面串口已关闭')
             }
             createFirmwareWindow()
           }
@@ -1150,23 +1163,6 @@ ipcMain.handle('export-operation-log', async (event, { filePath }) => {
 
 // 应用启动
 app.whenReady().then(() => {
-  // 设置 Web Serial API 权限
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    if (permission === 'serial') {
-      callback(true) // 允许 Web Serial API
-    } else {
-      callback(false) // 其他权限默认拒绝
-    }
-  })
-  
-  // 设置设备权限处理器（允许访问串口设备）
-  session.defaultSession.setDevicePermissionHandler((details) => {
-    if (details.deviceType === 'serial') {
-      return true // 允许串口设备访问
-    }
-    return false
-  })
-  
   // 加载配置
   loadConfig()
   addOperationLog('APP', 'START', `应用程序启动，版本=${APP_VERSION}`)
@@ -1198,4 +1194,511 @@ app.on('window-all-closed', () => {
 process.on('uncaughtException', (err) => {
   addOperationLog('ERROR', 'EXCEPTION', `未捕获的异常: ${err.message}`)
   console.error('未捕获的异常:', err)
+})
+
+// ========================================
+// 固件更新 — NodeTransport + 主进程烧录
+// ========================================
+
+// 固件更新状态
+let firmwareAborted = false
+
+/**
+ * 基于 serialport 的 NodeTransport，实现 esptool-js Transport 接口
+ */
+class NodeTransport {
+  constructor(portPath) {
+    this.portPath = portPath
+    this.baudrate = 115200
+    this.serialPort = null
+    this.buffer = new Uint8Array(0)
+    this.tracing = false
+    this.SLIP_END = 0xC0
+    this.SLIP_ESC = 0xDB
+    this.SLIP_ESC_END = 0xDC
+    this.SLIP_ESC_ESC = 0xDD
+    this.onDeviceLostCallback = null
+  }
+
+  /** 打开串口 */
+  async connect(baud = 115200, serialOptions = {}) {
+    this.baudrate = baud
+    return new Promise((resolve, reject) => {
+      this.serialPort = new SerialPort({
+        path: this.portPath,
+        baudRate: baud,
+        dataBits: serialOptions.dataBits || 8,
+        stopBits: serialOptions.stopBits || 1,
+        parity: serialOptions.parity || 'none',
+        flowControl: serialOptions.flowControl || 'none',
+        autoOpen: false,
+      })
+      this.serialPort.open((err) => {
+        if (err) { reject(err); return }
+        // 启动数据收集
+        this._startReadLoop()
+        resolve()
+      })
+    })
+  }
+
+  /** 关闭串口 */
+  async disconnect() {
+    return new Promise((resolve) => {
+      if (this.serialPort && this.serialPort.isOpen) {
+        this.serialPort.close(() => resolve())
+      } else {
+        resolve()
+      }
+    })
+  }
+
+  /** 写入数据（SLIP 编码后） */
+  async write(data) {
+    const outData = this.slipWriter(data)
+    return new Promise((resolve, reject) => {
+      if (!this.serialPort || !this.serialPort.isOpen) {
+        reject(new Error('串口未打开'))
+        return
+      }
+      this.serialPort.write(Buffer.from(outData), (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  }
+
+  /** 读取数据（SLIP 解码，带超时） */
+  async read(timeout) {
+    let partialPacket = null
+    let isEscaping = false
+    let readBytes = null
+
+    while (true) {
+      const timeStamp = Date.now()
+      readBytes = new Uint8Array(0)
+
+      while (Date.now() - timeStamp < timeout) {
+        if (this.buffer.length > 0) {
+          readBytes = this.buffer
+          this.buffer = new Uint8Array(0)
+          break
+        }
+        await sleep(1)
+      }
+
+      if (!readBytes || readBytes.length === 0) {
+        const msg = partialPacket === null
+          ? 'Serial data stream stopped: Possible serial noise or corruption.'
+          : 'No serial data received.'
+        if (this.tracing) console.log('[NodeTransport] ' + msg)
+        throw new Error(msg)
+      }
+
+      for (let i = 0; i < readBytes.length; i++) {
+        const byte = readBytes[i]
+        if (partialPacket === null) {
+          if (byte === this.SLIP_END) {
+              partialPacket = new Uint8Array(0)
+            } else {
+              // 非 SLIP 数据（如芯片启动日志），抛出异常让 readPacket 重试
+              if (this.tracing) {
+                console.log('[NodeTransport] 收到无效数据（非 SLIP 包头）: 0x' + byte.toString(16))
+              }
+              throw new Error('Invalid head of packet (0x' + byte.toString(16) + '): Possible serial noise or corruption.')
+            }
+        } else if (isEscaping) {
+          isEscaping = false
+          if (byte === this.SLIP_ESC_END) {
+            const newPacket = new Uint8Array(partialPacket.length + 1)
+            newPacket.set(partialPacket)
+            newPacket[partialPacket.length] = this.SLIP_END
+            partialPacket = newPacket
+          } else if (byte === this.SLIP_ESC_ESC) {
+            const newPacket = new Uint8Array(partialPacket.length + 1)
+            newPacket.set(partialPacket)
+            newPacket[partialPacket.length] = this.SLIP_ESC
+            partialPacket = newPacket
+          } else {
+            // Invalid escape sequence, restart packet
+            partialPacket = null
+          }
+        } else if (byte === this.SLIP_ESC) {
+          isEscaping = true
+        } else if (byte === this.SLIP_END) {
+          if (partialPacket.length > 0) {
+            this.detectPanicHandler(partialPacket)
+            return partialPacket
+          }
+        } else {
+          const newPacket = new Uint8Array(partialPacket.length + 1)
+          newPacket.set(partialPacket)
+          newPacket[partialPacket.length] = byte
+          partialPacket = newPacket
+        }
+      }
+    }
+  }
+
+  /** SLIP 编码 */
+  slipWriter(data) {
+    const output = []
+    output.push(this.SLIP_END)
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] === this.SLIP_END) {
+        output.push(this.SLIP_ESC, this.SLIP_ESC_END)
+      } else if (data[i] === this.SLIP_ESC) {
+        output.push(this.SLIP_ESC, this.SLIP_ESC_ESC)
+      } else {
+        output.push(data[i])
+      }
+    }
+    output.push(this.SLIP_END)
+    return new Uint8Array(output)
+  }
+
+  /** 启动后台数据读取 */
+  _startReadLoop() {
+    this.serialPort.on('data', (data) => {
+      const newData = new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      const combined = new Uint8Array(this.buffer.length + newData.length)
+      combined.set(this.buffer)
+      combined.set(newData, this.buffer.length)
+      this.buffer = combined
+    })
+    this.serialPort.on('close', () => {
+      if (this.onDeviceLostCallback) {
+        this.onDeviceLostCallback()
+      }
+    })
+    this.serialPort.on('error', (err) => {
+      console.error('[NodeTransport] 错误:', err.message)
+      if (this.onDeviceLostCallback) {
+        this.onDeviceLostCallback()
+      }
+    })
+  }
+
+  /** 设置设备丢失回调 */
+  setDeviceLostCallback(callback) {
+    this.onDeviceLostCallback = callback
+  }
+
+  /** 设置 DTR 信号（用于芯片复位） */
+  async setDTR(state) {
+    this._DTR_state = state
+    return new Promise((resolve, reject) => {
+      if (!this.serialPort || !this.serialPort.isOpen) {
+        reject(new Error('串口未打开'))
+        return
+      }
+      this.serialPort.set({ dtr: state }, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  }
+
+  /** 设置 RTS 信号（用于芯片复位） */
+  async setRTS(state) {
+    return new Promise((resolve, reject) => {
+      if (!this.serialPort || !this.serialPort.isOpen) {
+        reject(new Error('串口未打开'))
+        return
+      }
+      this.serialPort.set({ rts: state }, async (err) => {
+        if (err) { reject(err); return }
+        // 兼容 Windows usbser.sys 驱动：生成虚拟 DTR 变化
+        try {
+          await this.setDTR(this._DTR_state)
+          resolve()
+        } catch (e) {
+          reject(e)
+        }
+      })
+    })
+  }
+
+  /** 获取端口信息（ESPLoader 构造函数中调用） */
+  getInfo() {
+    return `Serial port ${this.portPath}`
+  }
+
+  /** 获取产品 ID（NodeTransport 不直接支持，返回 undefined） */
+  getPid() {
+    return undefined
+  }
+
+  /** 跟踪日志输出 */
+  trace(message) {
+    if (this.tracing) {
+      console.log(`[NodeTransport TRACE] ${message}`)
+    }
+    this.traceLog = (this.traceLog || '') + message + '\n'
+  }
+
+  /** 十六进制格式化（用于跟踪日志） */
+  hexConvert(uint8Array, autoSplit = true) {
+    const hexify = (s) => Array.from(s)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('')
+      .padEnd(16, ' ')
+    if (autoSplit && uint8Array.length > 16) {
+      let result = ''
+      let s = uint8Array
+      while (s.length > 0) {
+        const line = s.slice(0, 16)
+        const asciiLine = String.fromCharCode(...line)
+          .split('')
+          .map((c) => (c === ' ' || (c >= ' ' && c <= '~' && c !== '  ') ? c : '.'))
+          .join('')
+        s = s.slice(16)
+        result += `\n    ${hexify(line.slice(0, 8))} ${hexify(line.slice(8))} | ${asciiLine}`
+      }
+      return result
+    } else {
+      return hexify(uint8Array)
+    }
+  }
+
+  /** 启动后台读取循环（与 _startReadLoop 相同，兼容 esptool-js 接口） */
+  readLoop() {
+    // 已在 connect() 中调用 _startReadLoop()，无需重复
+  }
+
+  /** 检测 Guru Meditation / Fatal 错误 */
+  detectPanicHandler(input) {
+    const guruMeditationRegex = /G?uru Meditation Error: (?:Core \d panic'ed \(([a-zA-Z ]*)\))?/
+    const fatalExceptionRegex = /F?atal exception \(\d+\): (?:([a-zA-Z ]*)?.*epc)?/
+    const inputString = new TextDecoder('utf-8').decode(input)
+    const match = inputString.match(guruMeditationRegex) || inputString.match(fatalExceptionRegex)
+    if (match) {
+      const cause = match[1] || match[2]
+      const msg = `Guru Meditation Error detected${cause ? ` (${cause})` : ''}`
+      throw new Error(msg)
+    }
+  }
+
+  // 以下为兼容接口方法
+  appendArray(arr1, arr2) {
+    const combined = new Uint8Array(arr1.length + arr2.length)
+    combined.set(arr1)
+    combined.set(arr2, arr1.length)
+    return combined
+  }
+  flushInput() { this.buffer = new Uint8Array(0) }
+  inWaiting() { return this.buffer.length }
+  peek() { return this.buffer }
+}
+
+/** 动态加载 esptool-js（使用 lib/index.js ESM 入口） */
+let _esptoolModule = null
+async function getESPLoader() {
+  if (!_esptoolModule) {
+    _esptoolModule = await import('./node_modules/esptool-js/lib/index.js')
+  }
+  return _esptoolModule.ESPLoader
+}
+
+/** 向固件窗口发送日志 */
+function firmwareLog(msg) {
+  console.log('[FIRMWARE] ' + msg)
+  if (firmwareWindow && !firmwareWindow.isDestroyed()) {
+    firmwareWindow.webContents.send('firmware:log', msg)
+  }
+}
+
+/** 向固件窗口发送进度 */
+function firmwareProgress(percent, message) {
+  if (firmwareWindow && !firmwareWindow.isDestroyed()) {
+    firmwareWindow.webContents.send('firmware:progress', { percent, message })
+  }
+}
+
+/** 向固件窗口发送完成状态 */
+function firmwareComplete(success, error) {
+  if (firmwareWindow && !firmwareWindow.isDestroyed()) {
+    firmwareWindow.webContents.send('firmware:complete', { success, error })
+  }
+}
+
+/** 固件 IPC：列出可用串口 */
+ipcMain.handle('firmware:list-ports', async () => {
+  return await listPorts()
+})
+
+/** 固件 IPC：开始烧录 */
+ipcMain.handle('firmware:start-flash', async (event, { portPath, fileArray, baudRate }) => {
+  firmwareAborted = false
+
+  let transport = null
+  let esploader = null
+
+  // 添加总超时（30秒），防止卡死
+  const TIMEOUT_DURATION = 30000
+  const timeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('操作超时（30秒）')), TIMEOUT_DURATION)
+  })
+
+  try {
+    firmwareLog('准备烧录...')
+    firmwareProgress(0, '准备中')
+
+    // 解析文件数据
+    firmwareLog('正在读取固件文件...')
+    const fileDataArray = []
+    for (let i = 0; i < fileArray.length; i++) {
+      const part = fileArray[i]
+      const partName = part.firmwareFile.split(/[/\\]/).pop()
+      const buf = fs.readFileSync(part.firmwareFile)
+      fileDataArray.push({
+        data: new Uint8Array(buf),
+        address: parseInt(part.address, 16)
+      })
+      firmwareLog(`已加载: ${partName} -> ${part.address} (${buf.length} 字节)`)
+    }
+
+    if (firmwareAborted) throw new Error('操作已中止')
+
+    // 创建 Transport + ESPLoader
+    firmwareLog('创建 Transport 对象...')
+    transport = new NodeTransport(portPath)
+    transport.tracing = true
+    firmwareLog('Transport 对象创建成功')
+
+    const ESPLoader = await getESPLoader()
+    firmwareLog('创建 ESPLoader 对象...')
+    esploader = new ESPLoader({
+      transport: transport,
+      baudrate: baudRate || 115200,
+      terminal: {
+        clean: () => {},
+        writeLine: (data) => firmwareLog(data),
+        write: (data) => firmwareLog(data)
+      },
+      debugLogging: true
+    })
+    firmwareLog('ESPLoader 对象创建成功')
+
+    // 连接芯片（加入超时保护）
+    firmwareLog('正在连接芯片...')
+    firmwareProgress(5, '连接芯片...')
+    const chipName = await Promise.race([
+      esploader.main(),
+      timeoutPromise
+    ])
+    firmwareLog(`检测到芯片: ${chipName}`)
+
+    if (firmwareAborted) throw new Error('操作已中止')
+
+    // 烧录固件
+    firmwareLog('开始烧录固件...')
+    firmwareProgress(10, '正在烧录...')
+    await Promise.race([
+      esploader.writeFlash({
+        fileArray: fileDataArray,
+        flashMode: 'dio',
+        flashFreq: '80m',
+        flashSize: '4MB',
+        eraseAll: false,
+        compress: true,
+        reportProgress: (fileIndex, written, total) => {
+          if (firmwareAborted) throw new Error('操作已中止')
+          const fileProgress = (written / total) * 100
+          const totalProgress = ((fileIndex + fileProgress / 100) / fileDataArray.length) * 100
+          firmwareProgress(Math.min(totalProgress, 100), `烧录中... ${Math.floor(totalProgress)}%`)
+        }
+      }),
+      timeoutPromise
+    ])
+
+    if (firmwareAborted) throw new Error('操作已中止')
+
+    // 复位设备
+    firmwareLog('正在复位设备...')
+    firmwareProgress(95, '复位中...')
+    await esploader.after('hard_reset')
+
+    firmwareProgress(100, '烧录完成')
+    firmwareLog('烧录完成！')
+    firmwareComplete(true)
+  } catch (err) {
+    if (err.message === '操作已中止' || firmwareAborted) {
+      firmwareLog('操作已手动停止')
+    } else {
+      firmwareLog(`错误: ${err.message}`)
+      console.error('[FIRMWARE] 烧录失败:', err)
+    }
+    firmwareComplete(false, firmwareAborted ? '操作已中止' : err.message)
+  } finally {
+    if (esploader) {
+      try { await esploader.close() } catch (e) { /* ignore */ }
+    }
+    if (transport) {
+      try { await transport.disconnect() } catch (e) { /* ignore */ }
+    }
+  }
+})
+
+/** 固件 IPC：擦除 Flash */
+ipcMain.handle('firmware:erase-flash', async (event, { portPath, baudRate }) => {
+  firmwareAborted = false
+
+  let transport = null
+  let esploader = null
+
+  try {
+    firmwareLog('开始擦除 Flash...')
+    firmwareProgress(0, '擦除中')
+
+    transport = new NodeTransport(portPath)
+    const ESPLoader = await getESPLoader()
+    esploader = new ESPLoader({
+      transport: transport,
+      baudrate: baudRate || 115200,
+      terminal: {
+        clean: () => {},
+        writeLine: (data) => firmwareLog(data),
+        write: (data) => firmwareLog(data)
+      },
+      debugLogging: true
+    })
+
+    firmwareLog('正在连接芯片...')
+    await esploader.main()
+    firmwareLog('芯片连接成功')
+
+    if (firmwareAborted) throw new Error('操作已中止')
+
+    firmwareLog('正在擦除 Flash...')
+    await esploader.eraseFlash()
+    firmwareLog('擦除完成')
+
+    firmwareLog('正在复位设备...')
+    await esploader.after('hard_reset')
+    firmwareLog('复位完成')
+
+    firmwareComplete(true)
+  } catch (err) {
+    if (err.message === '操作已中止' || firmwareAborted) {
+      firmwareLog('操作已手动停止')
+    } else {
+      firmwareLog(`错误: ${err.message}`)
+      console.error('[FIRMWARE] 擦除失败:', err)
+    }
+    firmwareComplete(false, firmwareAborted ? '操作已中止' : err.message)
+  } finally {
+    if (esploader) {
+      try { await esploader.close() } catch (e) { /* ignore */ }
+    }
+    if (transport) {
+      try { await transport.disconnect() } catch (e) { /* ignore */ }
+    }
+  }
+})
+
+/** 固件 IPC：停止操作 */
+ipcMain.handle('firmware:stop', async () => {
+  firmwareAborted = true
+  return { success: true }
 })

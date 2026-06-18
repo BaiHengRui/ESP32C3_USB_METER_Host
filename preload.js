@@ -100,5 +100,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 固件更新
   openFirmwareDialog: () => ipcRenderer.invoke('open-firmware-dialog'),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
+  releaseMainPort: () => ipcRenderer.invoke('release-main-port'),
+
+  // 固件更新（主进程烧录 — 新方案）
+  firmwareListPorts: () => ipcRenderer.invoke('firmware:list-ports'),
+  firmwareStartFlash: (params) => ipcRenderer.invoke('firmware:start-flash', params),
+  firmwareEraseFlash: (params) => ipcRenderer.invoke('firmware:erase-flash', params),
+  firmwareStop: () => ipcRenderer.invoke('firmware:stop'),
+
+  // 固件更新事件
+  onFirmwareLog: (callback) => {
+    const listener = (_event, msg) => callback(msg)
+    ipcRenderer.on('firmware:log', listener)
+    return () => ipcRenderer.removeListener('firmware:log', listener)
+  },
+  onFirmwareProgress: (callback) => {
+    const listener = (_event, data) => callback(data)
+    ipcRenderer.on('firmware:progress', listener)
+    return () => ipcRenderer.removeListener('firmware:progress', listener)
+  },
+  onFirmwareComplete: (callback) => {
+    const listener = (_event, data) => callback(data)
+    ipcRenderer.on('firmware:complete', listener)
+    return () => ipcRenderer.removeListener('firmware:complete', listener)
+  },
 })
 

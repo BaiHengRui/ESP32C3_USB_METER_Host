@@ -62,6 +62,7 @@
     "patch-package": "^8.0.1"
   },
   "dependencies": {
+    "all": "^0.0.0",
     "chart.js": "^4.5.1",
     "chartjs-plugin-crosshair": "^2.0.0",
     "chartjs-plugin-zoom": "^2.2.0",
