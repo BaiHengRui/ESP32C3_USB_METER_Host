@@ -359,6 +359,14 @@ function createFirmwareWindow() {
     firmwareWindow.webContents.send('theme-changed', getCurrentTheme())
   })
 
+  // F12 打开当前窗口的控制台
+  firmwareWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12') {
+      event.preventDefault()
+      firmwareWindow.webContents.toggleDevTools()
+    }
+  })
+
   firmwareWindow.on('closed', () => {
     firmwareWindow = null
   })
@@ -557,11 +565,68 @@ function handleSerialData(data) {
   // 将新数据追加到缓冲区
   dataBuffer = Buffer.concat([dataBuffer, data])
 
-  // 查找换行符（文本模式）
+  // 二进制模式：扫描缓冲区寻找 0xAA 包头
+  while (dataBuffer.length >= USB_CDC_DATA_SIZE) {
+    // 查找 0xAA 包头
+    const headerIndex = dataBuffer.indexOf(0xAA)
+    
+    if (headerIndex === -1) {
+      // 没有找到包头，退出循环，等待更多数据
+      break
+    }
+
+    // 如果包头不在缓冲区开头，先处理前面的数据（作为文本）
+    if (headerIndex > 0) {
+      const preHeaderData = dataBuffer.slice(0, headerIndex)
+      processTextData(preHeaderData)
+      dataBuffer = dataBuffer.slice(headerIndex)
+    }
+
+    // 现在 dataBuffer[0] === 0xAA，检查是否有完整的 64 字节数据包
+    if (dataBuffer.length < USB_CDC_DATA_SIZE) {
+      // 数据不完整，等待更多数据
+      break
+    }
+
+    const packet = dataBuffer.slice(0, USB_CDC_DATA_SIZE)
+    const parsedData = parseUSBCDCData(packet)
+    
+    if (parsedData) {
+      // 校验通过，提取数据包
+      dataBuffer = dataBuffer.slice(USB_CDC_DATA_SIZE)
+      
+      // 发送解析后的数据到渲染进程
+      if (curveWindow && !curveWindow.isDestroyed()) {
+        curveWindow.webContents.send('meter-data', parsedData)
+      }
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('meter-data', parsedData)
+      }
+    } else {
+      // 校验失败，跳过当前字节继续寻找下一个 0xAA
+      dataBuffer = dataBuffer.slice(1)
+    }
+  }
+
+  // 处理剩余缓冲区中的文本数据（最后可能没有完整的二进制数据包）
+  processTextData(dataBuffer)
+
+  // 防止缓冲区过大
+  if (dataBuffer.length > 1024) {
+    dataBuffer = dataBuffer.slice(-512)
+  }
+}
+
+// 处理文本数据（查找换行符）
+function processTextData(buffer) {
+  if (buffer.length === 0) return
+  
+  let tempBuffer = Buffer.from(buffer)
   let newlineIndex
-  while ((newlineIndex = dataBuffer.indexOf('\n')) !== -1) {
-    const lineBuffer = dataBuffer.slice(0, newlineIndex)
-    dataBuffer = dataBuffer.slice(newlineIndex + 1)
+  
+  while ((newlineIndex = tempBuffer.indexOf('\n')) !== -1) {
+    const lineBuffer = tempBuffer.slice(0, newlineIndex)
+    tempBuffer = tempBuffer.slice(newlineIndex + 1)
 
     // 检查是否为有效文本（过滤二进制数据）
     if (isValidText(lineBuffer)) {
@@ -572,33 +637,12 @@ function handleSerialData(data) {
       }
     }
   }
-
-  // 检查是否有完整的 64 字节数据包（二进制模式）
-  while (dataBuffer.length >= USB_CDC_DATA_SIZE) {
-    // 检查是否是二进制数据包（以 0xAA 开头）
-    if (dataBuffer[0] === 0xAA) {
-      const packet = dataBuffer.slice(0, USB_CDC_DATA_SIZE)
-      dataBuffer = dataBuffer.slice(USB_CDC_DATA_SIZE)
-
-      const parsedData = parseUSBCDCData(packet)
-      if (parsedData) {
-        // 发送解析后的数据到渲染进程
-        if (curveWindow && !curveWindow.isDestroyed()) {
-          curveWindow.webContents.send('meter-data', parsedData)
-        }
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('meter-data', parsedData)
-        }
-      }
-    } else {
-      // 不是二进制数据包，丢弃一个字节
-      dataBuffer = dataBuffer.slice(1)
-    }
-  }
-
-  // 防止缓冲区过大
-  if (dataBuffer.length > 1024) {
-    dataBuffer = dataBuffer.slice(-512)
+  
+  // 更新 dataBuffer 为未处理完的剩余数据
+  if (tempBuffer.length > 0) {
+    dataBuffer = tempBuffer
+  } else {
+    dataBuffer = Buffer.alloc(0)
   }
 }
 

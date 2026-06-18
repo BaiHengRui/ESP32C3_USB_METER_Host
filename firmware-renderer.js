@@ -1,7 +1,7 @@
 // 固件更新窗口渲染进程
 // 使用 esptool-js 进行 ESP32 烧录
 
-import { ESPLoader, Transport } from 'esptool-js'
+import { ESPLoader, Transport, UsbJtagSerialReset } from 'esptool-js'
 
 // 延迟函数
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms))
@@ -11,6 +11,21 @@ let isFlashing = false
 
 // DOM 元素 (延迟获取)
 let elements
+
+// 全局错误处理
+window.addEventListener('error', (e) => {
+  console.error('[FIRMWARE] 未捕获的错误:', e.error)
+  if (typeof appendLog === 'function') {
+    appendLog(`未捕获的错误: ${e.error ? e.error.message : e.message}`)
+  }
+})
+
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[FIRMWARE] 未处理的 Promise 拒绝:', e.reason)
+  if (typeof appendLog === 'function') {
+    appendLog(`未处理的 Promise 拒绝: ${e.reason ? e.reason.message : e.reason}`)
+  }
+})
 
 // 获取 DOM 元素
 function getElements() {
@@ -364,6 +379,79 @@ function getPartitions() {
   return partitions
 }
 
+// 执行 USB-JTAG-Serial 复位序列
+// 参考 esptool-js 的 UsbJtagSerialReset 实现
+async function performUsbJtagReset(port) {
+  try {
+    // 打开端口以便设置信号
+    if (!port.readable && !port.writable) {
+      await port.open({
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none'
+      })
+      appendLog('临时打开端口进行复位...')
+    }
+    
+    // USB-JTAG-Serial 复位序列
+    // 参考 esptool-js 的 UsbJtagSerialReset.reset()
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false })
+    await delay(100)
+    await port.setSignals({ dataTerminalReady: true, requestToSend: false })
+    await delay(100)
+    await port.setSignals({ dataTerminalReady: false, requestToSend: true })
+    await delay(100)
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false })
+    
+    // 关闭端口，让 esptool-js 重新打开
+    await port.close()
+    appendLog('复位端口已关闭')
+    
+  } catch (e) {
+    appendLog(`USB-JTAG复位失败: ${e.message}`)
+    // 尝试关闭端口
+    try {
+      if (port.readable || port.writable) {
+        await port.close()
+      }
+    } catch (err) {
+      // 忽略
+    }
+  }
+}
+
+// 将设备重置为 bootloader 模式
+// ESP32C3 USB-JTAG 模式下，esptool-js 需要自己处理复位
+async function resetToBootloader(port) {
+  try {
+    // 如果端口已打开，先关闭（确保干净的状态）
+    if (port.readable || port.writable) {
+      appendLog('端口已打开，先关闭...')
+      try {
+        await port.close()
+        await delay(500)
+      } catch (e) {
+        appendLog('关闭端口时出错: ' + e.message)
+      }
+    }
+    
+    appendLog('复位完成（等待 esptool-js 自动处理）')
+    
+  } catch (err) {
+    appendLog('复位设备时出错: ' + err.message)
+    // 尝试强制关闭端口
+    try {
+      if (port.readable || port.writable) {
+        await port.close()
+      }
+    } catch (e) {
+      // 忽略
+    }
+  }
+}
+
 // 开始烧录
 async function startFlashing() {
   const portPath = elements.portSelect.value
@@ -444,6 +532,7 @@ async function startFlashing() {
   appendLog('开始烧录...')
 
   let transport = null
+  let esploader = null
   
   try {
     // 如果主界面占用了串口，先释放
@@ -452,50 +541,19 @@ async function startFlashing() {
       if (mainWindowPortOpen) {
         appendLog('正在释放主界面占用的串口...')
         await window.electronAPI.closePort()
-        // 增加延迟时间，确保串口完全关闭
         await delay(1000)
-        // 验证串口是否已关闭
-        let retryCount = 0
-        while (retryCount < 5) {
-          const stillOpen = await window.electronAPI.isPortOpen()
-          if (!stillOpen) {
-            appendLog('主界面串口已成功释放')
-            break
-          }
-          appendLog(`等待串口关闭... (${retryCount + 1}/5)`)
-          await delay(500)
-          retryCount++
-        }
       }
     } catch (e) {
       appendLog('释放主界面串口时出错: ' + e.message)
     }
     
-    // 创建 Transport 对象（esptool-js 会自动打开端口）
-    appendLog('创建 Transport 对象...')
-    transport = new Transport(port, true)
-    
-    // 创建 ESPLoader，初始波特率 115200
-    appendLog('创建 ESPLoader 对象...')
-    const esploader = new ESPLoader({
-      transport: transport,
-      baudrate: 115200,
-      terminal: terminal
-    })
-    
-    // 连接并检测芯片
-    appendLog('正在检测芯片...')
-    const chip = await esploader.main()
-    const chipName = chip.getChipName ? chip.getChipName() : chip
-    appendLog(`检测到芯片: ${chipName}`)
-    
-    // 准备文件列表
+    // 准备文件列表（提前读取，避免在烧录过程中阻塞）
+    appendLog('准备文件列表...')
     const fileArray = []
     for (const part of partitions) {
       const partName = part.firmwareFile.split(/[/\\]/).pop()
       appendLog(`正在读取固件: ${partName}`)
       
-      // 通过主进程读取文件
       const fileData = await window.electronAPI.readFile(part.firmwareFile)
       const dataArray = new Uint8Array(fileData)
       
@@ -507,44 +565,156 @@ async function startFlashing() {
       appendLog(`已加载: ${partName} -> ${part.address} (${dataArray.length} 字节)`)
     }
     
-    // 烧录固件
-    appendLog('开始烧录...')
-    await esploader.writeFlash({
-      fileArray: fileArray,
-      flashSize: 'keep',
-      flashMode: 'dio',
-      flashFreq: '80m',
-      eraseAll: false,
-      compress: true,
-      reportProgress: (fileIndex, seq, total) => {
-        // 计算总进度
-        const fileProgress = (seq / total) * 100
-        const totalProgress = ((fileIndex + fileProgress / 100) / fileArray.length) * 100
-        updateProgress(Math.min(totalProgress, 100), `烧录中... ${Math.floor(totalProgress)}%`)
+    // 连接并检测芯片（带重试）
+    let chip = null
+    let connectAttempts = 0
+    const maxAttempts = 3
+    
+    while (connectAttempts < maxAttempts) {
+      try {
+        // 确保端口处于关闭状态
+        if (port.readable || port.writable) {
+          appendLog('端口已打开，先关闭...')
+          await port.close()
+          await delay(500)
+        }
+        
+        appendLog(`正在检测芯片... (尝试 ${connectAttempts + 1}/${maxAttempts})`)
+        
+        // 获取设备 PID，判断是否为 USB-JTAG-Serial
+        const portInfo = port.getInfo()
+        const pid = portInfo.usbProductId
+        appendLog(`设备 PID: 0x${pid.toString(16)}`)
+        
+        // 确保端口已经关闭
+        try {
+          if (port.readable || port.writable) {
+            appendLog('端口已打开，正在关闭...')
+            await port.close()
+            await new Promise(resolve => setTimeout(resolve, 200))
+            appendLog('端口已关闭')
+          }
+        } catch (e) {
+          appendLog(`关闭端口失败: ${e.message}`)
+        }
+        
+        // 创建 Transport 对象（esptool-js 会自动打开端口）
+        appendLog('创建 Transport 对象...')
+        transport = new Transport(port, true)
+        appendLog('Transport 对象创建成功')
+        
+        // 创建 ESPLoader，初始波特率 115200
+        appendLog('创建 ESPLoader 对象...')
+        esploader = new ESPLoader({
+          transport: transport,
+          baudrate: 115200,
+          terminal: terminal,
+          debugLogging: false
+        })
+        appendLog('ESPLoader 对象创建成功')
+        
+        // 连接并检测芯片（esploader 会自动检测设备类型并执行相应的复位序列）
+        appendLog('开始连接芯片...')
+        const startTime = Date.now()
+        const chipName = await esploader.main()
+        const connectTime = Date.now() - startTime
+        appendLog(`检测到芯片: ${chipName} (耗时 ${connectTime}ms)`)
+        
+        // 烧录固件
+        appendLog('开始烧录...')
+        await esploader.writeFlash({
+          fileArray: fileArray,
+          flashSize: 'keep',
+          flashMode: 'dio',
+          flashFreq: '80m',
+          eraseAll: false,
+          compress: true,
+          reportProgress: (fileIndex, seq, total) => {
+            const fileProgress = (seq / total) * 100
+            const totalProgress = ((fileIndex + fileProgress / 100) / fileArray.length) * 100
+            updateProgress(Math.min(totalProgress, 100), `烧录中... ${Math.floor(totalProgress)}%`)
+          }
+        })
+        
+        // 烧录完成后复位设备
+        appendLog('正在复位设备...')
+        await esploader.after('hard_reset')
+        
+        updateProgress(100, '烧录完成')
+        appendLog('烧录完成！')
+        
+        flashComplete(true, '烧录成功')
+        return
+        
+      } catch (err) {
+        connectAttempts++
+        appendLog(`检测失败 (${connectAttempts}/${maxAttempts}): ${err.message}`)
+        
+        // 清理资源
+        if (esploader) {
+          try {
+            await esploader.close()
+          } catch (e) {
+            // 忽略
+          }
+          esploader = null
+        }
+        if (transport) {
+          try {
+            await transport.close()
+          } catch (e) {
+            // 忽略
+          }
+          transport = null
+        }
+        
+        // 确保端口关闭
+        try {
+          if (port.readable || port.writable) {
+            await port.close()
+          }
+        } catch (e) {
+          // 忽略
+        }
+        
+        if (connectAttempts < maxAttempts) {
+          appendLog('等待后重试...')
+          await delay(2000)
+        }
       }
-    })
+    }
     
-    // 复位设备
-    appendLog('正在复位设备...')
-    await esploader.hardReset()
-    
-    updateProgress(100, '烧录完成')
-    appendLog('烧录完成！')
-    
-    flashComplete(true, '烧录成功')
+    throw new Error('无法检测到芯片，请确保设备已进入 bootloader 模式')
     
   } catch (err) {
     appendLog(`错误: ${err.message}`)
     console.error('烧录失败:', err)
     flashComplete(false, err.message)
   } finally {
-    if (transport) {
+    // 清理资源
+    if (esploader) {
       try {
-        transport.close()
+        await esploader.close()
       } catch (e) {
-        // 忽略关闭错误
+        // 忽略
       }
     }
+    if (transport) {
+      try {
+        await transport.close()
+      } catch (e) {
+        // 忽略
+      }
+    }
+    
+    elements.startBtn.disabled = false
+    elements.stopBtn.disabled = true
+    elements.eraseBtn.disabled = false
+    elements.addRowBtn.disabled = false
+    elements.portSelect.disabled = false
+    
+    // 恢复所有浏览按钮
+    browseButtons.forEach(btn => btn.disabled = false)
   }
 }
 
@@ -556,6 +726,7 @@ function stopFlashing() {
 // 擦除 Flash
 async function eraseFlash() {
   let transport = null
+  let esploader = null
   
   const portPath = elements.portSelect.value
   
@@ -614,65 +785,159 @@ async function eraseFlash() {
       if (mainWindowPortOpen) {
         appendLog('正在释放主界面占用的串口...')
         await window.electronAPI.closePort()
-        // 增加延迟时间，确保串口完全关闭
         await delay(1000)
-        // 验证串口是否已关闭
-        let retryCount = 0
-        while (retryCount < 5) {
-          const stillOpen = await window.electronAPI.isPortOpen()
-          if (!stillOpen) {
-            appendLog('主界面串口已成功释放')
-            break
-          }
-          appendLog(`等待串口关闭... (${retryCount + 1}/5)`)
-          await delay(500)
-          retryCount++
-        }
       }
     } catch (e) {
       appendLog('释放主界面串口时出错: ' + e.message)
     }
     
-    // 创建 Transport 对象（esptool-js 会自动打开端口）
-    appendLog('创建 Transport 对象...')
-    transport = new Transport(port, true)
+    // 检测芯片（带重试）
+    let chip = null
+    let connectAttempts = 0
+    const maxAttempts = 3
     
-    // 创建 ESPLoader
-    appendLog('创建 ESPLoader 对象...')
-    const esploader = new ESPLoader({
-      transport: transport,
-      baudrate: 115200,
-      terminal: terminal
-    })
+    while (connectAttempts < maxAttempts) {
+      try {
+        // 确保端口处于关闭状态
+        if (port.readable || port.writable) {
+          appendLog('端口已打开，先关闭...')
+          await port.close()
+          await delay(500)
+        }
+        
+        appendLog(`正在检测芯片... (尝试 ${connectAttempts + 1}/${maxAttempts})`)
+        
+        // 获取设备 PID，判断是否为 USB-JTAG-Serial
+        const portInfo = port.getInfo()
+        const pid = portInfo.usbProductId
+        appendLog(`设备 PID: 0x${pid.toString(16)}`)
+        
+        // 如果是 USB-JTAG-Serial (PID 0x1001)，手动执行复位序列
+        if (pid === 0x1001) {
+          appendLog('检测到 USB-JTAG-Serial 设备，执行特殊复位序列...')
+          await performUsbJtagReset(port)
+          appendLog('USB-JTAG-Serial 复位完成')
+        }
+        
+        // 创建 Transport 对象（esptool-js 会自动打开端口）
+        appendLog('创建 Transport 对象...')
+        transport = new Transport(port, true)
+        appendLog('Transport 对象创建成功')
+        
+        // 创建 ESPLoader
+        appendLog('创建 ESPLoader 对象...')
+        esploader = new ESPLoader({
+          transport: transport,
+          baudrate: 115200,
+          terminal: terminal,
+          debugLogging: false
+        })
+        appendLog('ESPLoader 对象创建成功')
+        
+        // 检测芯片
+        appendLog('开始连接芯片...')
+        const startTime = Date.now()
+        const chipName = await esploader.main()
+        const connectTime = Date.now() - startTime
+        appendLog(`检测到芯片: ${chipName} (耗时 ${connectTime}ms)`)
+        
+        // 擦除 Flash
+        appendLog('正在擦除 Flash...')
+        appendLog('注意：全芯片擦除可能需要几秒钟时间，请耐心等待...')
+        
+        let eraseSuccess = false
+        try {
+          const eraseResult = await esploader.eraseFlash()
+          appendLog(`擦除完成！结果: ${eraseResult}`)
+          eraseSuccess = true
+        } catch (eraseErr) {
+          appendLog(`擦除失败: ${eraseErr.message}`)
+          appendLog('尝试使用低级命令擦除...')
+          try {
+            // 尝试使用低级命令直接擦除
+            const result = await esploader.checkCommand('erase flash', esploader.ESP_ERASE_FLASH, undefined, undefined, undefined, esploader.CHIP_ERASE_TIMEOUT)
+            appendLog(`低级命令擦除结果: ${result}`)
+            eraseSuccess = true
+          } catch (lowErr) {
+            appendLog(`低级命令擦除也失败: ${lowErr.message}`)
+            throw new Error(`擦除失败: ${lowErr.message}`)
+          }
+        }
+        
+        if (!eraseSuccess) {
+          throw new Error('擦除操作未成功完成')
+        }
+        
+        // 复位
+        appendLog('正在复位设备...')
+        await esploader.after('hard_reset')
+        
+        appendLog('复位完成')
+        flashComplete(true, '擦除成功')
+        return
+        
+      } catch (err) {
+        connectAttempts++
+        appendLog(`检测失败 (${connectAttempts}/${maxAttempts}): ${err.message}`)
+        
+        // 清理资源
+        if (esploader) {
+          try {
+            await esploader.close()
+          } catch (e) {
+            // 忽略
+          }
+          esploader = null
+        }
+        if (transport) {
+          try {
+            await transport.close()
+          } catch (e) {
+            // 忽略
+          }
+          transport = null
+        }
+        
+        // 确保端口关闭
+        try {
+          if (port.readable || port.writable) {
+            await port.close()
+          }
+        } catch (e) {
+          // 忽略
+        }
+        
+        if (connectAttempts < maxAttempts) {
+          appendLog('等待后重试...')
+          await delay(2000)
+        }
+      }
+    }
     
-    // 检测芯片
-    appendLog('正在检测芯片...')
-    const chip = await esploader.main()
-    const chipName = chip.getChipName ? chip.getChipName() : chip
-    appendLog(`检测到芯片: ${chipName}`)
-    
-    // 擦除 Flash
-    appendLog('正在擦除 Flash...')
-    await esploader.eraseFlash()
-    
-    appendLog('擦除完成！')
-    
-    // 复位
-    await esploader.hardReset()
+    throw new Error('无法检测到芯片，请确保设备已进入 bootloader 模式')
     
   } catch (err) {
     appendLog(`擦除失败: ${err.message}`)
     console.error('擦除失败:', err)
   } finally {
-    elements.eraseBtn.disabled = false
-    elements.startBtn.disabled = false
-    if (transport) {
+    // 清理资源
+    if (esploader) {
       try {
-        transport.close()
+        await esploader.close()
       } catch (e) {
-        // 忽略关闭错误
+        // 忽略
       }
     }
+    if (transport) {
+      try {
+        await transport.close()
+      } catch (e) {
+        // 忽略
+      }
+    }
+    
+    elements.eraseBtn.disabled = false
+    elements.startBtn.disabled = false
   }
 }
 
@@ -689,7 +954,9 @@ function flashComplete(success, message) {
   const browseButtons = elements.partitionTableBody.querySelectorAll('.btn-browse-fw')
   browseButtons.forEach(btn => btn.disabled = false)
   
-  if (!success) {
+  if (success) {
+    appendLog(`成功: ${message}`)
+  } else {
     appendLog(`烧录失败: ${message}`)
   }
 }
