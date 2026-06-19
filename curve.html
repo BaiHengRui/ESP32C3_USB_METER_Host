@@ -157,8 +157,8 @@
           <select id="intervalSelect">
             <option value="50">50ms</option>
             <option value="100">100ms</option>
-            <option value="200" selected>200ms</option>
-            <option value="500">500ms</option>
+            <option value="200">200ms</option>
+            <option value="500" selected>500ms</option>
             <option value="1000">1000ms</option>
           </select>
           <button id="toggleStreamBtn" class="btn btn-success">开始采集</button>
@@ -298,6 +298,45 @@
     let isStreaming = false
     let streamInterval = null
 
+    // Y轴锁定范围状态（用于电压V、电流A、功率W三个主曲线）
+    // 每个轴记录当前锁定的 min 和 max，超出范围才更新
+    const yAxisBounds = {
+      y:   { lockedMin: null, lockedMax: null },   // 电压
+      y1:  { lockedMin: null, lockedMax: null },  // 电流
+      y2:  { lockedMin: null, lockedMax: null }    // 功率
+    }
+
+    /**
+     * 根据新数据更新锁定的Y轴范围。
+     * 规则：min锁定直到有新值更小；max锁定直到有新值更大（max+1四舍五入）。
+     */
+    function updateYAxisBounds(axisId, newValue) {
+      const bounds = yAxisBounds[axisId]
+      if (!bounds || isNaN(newValue)) return
+
+      if (bounds.lockedMin === null) {
+        // 首次初始化：min-1 到 max+1
+        bounds.lockedMin = newValue - 1
+        bounds.lockedMax = newValue + 1
+      } else {
+        // 只在超出范围时更新
+        if (newValue < bounds.lockedMin) {
+          bounds.lockedMin = newValue - 1  // min 向下扩展
+        }
+        if (newValue > bounds.lockedMax) {
+          // max 向上扩展，四舍五入
+          bounds.lockedMax = Math.round(newValue + 1)
+        }
+      }
+
+      // 应用到 chart
+      const scale = mainChart.options.scales[axisId]
+      if (scale) {
+        scale.min = bounds.lockedMin
+        scale.max = bounds.lockedMax
+      }
+    }
+
     // DOM 元素
     const elements = {
       intervalSelect: document.getElementById('intervalSelect'),
@@ -397,7 +436,12 @@
     }
 
     function getTimeDataSource() {
-      return elements.useSystemTimeCheck.checked ? dataStore.systemTimeData : dataStore.timeData
+      if (elements.useSystemTimeCheck.checked && dataStore.systemTimeData.length > 0) {
+        // 转换为相对时间（从0开始），避免X轴显示巨大的Unix时间戳
+        const startTime = dataStore.systemTimeData[0]
+        return dataStore.systemTimeData.map(t => t - startTime)
+      }
+      return dataStore.timeData
     }
 
     function rebuildChartData() {
@@ -439,6 +483,16 @@
 
       overviewChart.options.scales.x.min = 0
       overviewChart.options.scales.x.max = latestTime || 10
+
+      // 更新Y轴锁定范围（仅在未手动缩放时）
+      if (!userZoomed && dataStore.voltageData.length > 0) {
+        const lastVoltage = dataStore.voltageData[dataStore.voltageData.length - 1]
+        const lastCurrent = dataStore.currentData[dataStore.currentData.length - 1]
+        const lastPower = dataStore.powerData[dataStore.powerData.length - 1]
+        updateYAxisBounds('y', lastVoltage)
+        updateYAxisBounds('y1', lastCurrent)
+        updateYAxisBounds('y2', lastPower)
+      }
 
       mainChart.update('none')
       overviewChart.update('none')
@@ -976,6 +1030,8 @@
       })
 
       userZoomed = false
+      // 重置Y轴锁定范围
+      Object.values(yAxisBounds).forEach(b => { b.lockedMin = null; b.lockedMax = null })
       mainChart.data.labels = []
       mainChart.data.datasets.forEach(ds => ds.data = [])
       overviewChart.data.labels = []
@@ -984,6 +1040,11 @@
       mainChart.options.scales.x.max = 10
       overviewChart.options.scales.x.min = 0
       overviewChart.options.scales.x.max = 10
+      // 重置Y轴显示范围
+      ;['y', 'y1', 'y2'].forEach(id => {
+        mainChart.options.scales[id].min = undefined
+        mainChart.options.scales[id].max = undefined
+      })
 
       mainChart.update('none')
       overviewChart.update('none')

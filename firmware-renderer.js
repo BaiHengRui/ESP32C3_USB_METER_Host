@@ -6,6 +6,8 @@ let isFlashing = false
 let firmwareLogCleanup = null
 let firmwareProgressCleanup = null
 let firmwareCompleteCleanup = null
+// 端口信息映射表，存储每个端口的 VID/PID，用于 USB-JTAG 设备识别
+const portInfoMap = new Map()
 
 // DOM 元素
 let elements
@@ -117,6 +119,9 @@ async function refreshPorts() {
 
     elements.portSelect.innerHTML = '<option value="">选择端口...</option>'
 
+    // 清空端口信息映射
+    portInfoMap.clear()
+
     // 通过主进程获取端口列表
     const systemPorts = await window.electronAPI.firmwareListPorts()
     appendLog('系统端口数量: ' + systemPorts.length)
@@ -142,6 +147,12 @@ async function refreshPorts() {
       }
       option.textContent = displayText
       elements.portSelect.appendChild(option)
+
+      // 存储端口 VID/PID 信息，用于 USB-JTAG 识别
+      portInfoMap.set(port.path, {
+        vendorId: port.vendorId ? parseInt(port.vendorId, 16) : 0,
+        productId: port.productId ? parseInt(port.productId, 16) : 0
+      })
     }
 
     appendLog('端口刷新完成，共 ' + systemPorts.length + ' 个端口')
@@ -336,10 +347,14 @@ async function startFlashing() {
   appendLog('开始烧录...')
 
   try {
+    // 获取端口 VID/PID，用于 USB-JTAG 识别
+    const portInfo = portInfoMap.get(portPath)
     await window.electronAPI.firmwareStartFlash({
       portPath: portPath,
       fileArray: partitions,
-      baudRate: 115200
+      baudRate: 115200,
+      productId: portInfo ? portInfo.productId : 0,
+      vendorId: portInfo ? portInfo.vendorId : 0
     })
   } catch (err) {
     appendLog(`烧录调用失败: ${err.message}`)
@@ -382,9 +397,13 @@ async function eraseFlash() {
   appendLog('开始擦除 Flash...')
 
   try {
+    // 获取端口 VID/PID，用于 USB-JTAG 识别
+    const portInfo = portInfoMap.get(portPath)
     await window.electronAPI.firmwareEraseFlash({
       portPath: portPath,
-      baudRate: 115200
+      baudRate: 115200,
+      productId: portInfo ? portInfo.productId : 0,
+      vendorId: portInfo ? portInfo.vendorId : 0
     })
   } catch (err) {
     appendLog(`擦除调用失败: ${err.message}`)

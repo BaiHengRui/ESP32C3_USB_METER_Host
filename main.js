@@ -762,9 +762,10 @@ ipcMain.handle('release-main-port', async () => {
     console.log('[FIRMWARE] 正在关闭主界面串口...')
     addOperationLog('SERIAL', 'RELEASE_FOR_FIRMWARE', '固件更新释放串口')
     await closeSerialPort()
-    // 等待串口完全关闭，给操作系统释放端口的时间
-    await delay(1000)
-    console.log('[FIRMWARE] 主界面串口已关闭')
+    // USB 复合设备（如 ESP32-C3 USB-JTAG）需要更长冷却时间
+    // 确保操作系统完全注销端口权限并重新注册
+    await delay(2000)
+    console.log('[FIRMWARE] 主界面串口已关闭（冷却 2s）')
     return { success: true, released: true }
   }
   return { success: true, released: false }
@@ -776,16 +777,14 @@ ipcMain.handle('open-curve-window', async () => {
 })
 
 ipcMain.handle('open-firmware-window', async () => {
-  // 先关闭主界面的串口连接，释放端口占用
-  if (serialPort && serialPort.isOpen) {
-    console.log('[FIRMWARE] 正在关闭主界面串口...')
-    await closeSerialPort()
-    await delay(1000)
-    console.log('[FIRMWARE] 主界面串口已关闭')
-  }
-
-  createFirmwareWindow()
-  return { success: true }
+  // 固件更新功能暂不可用
+  await dialog.showMessageBox(BrowserWindow.getAllWindows()[0], {
+    type: 'warning',
+    title: '功能暂不可用',
+    message: '固件更新功能未实现完整功能，待开发验证',
+    buttons: ['确定']
+  })
+  return { success: false }
 })
 
 // 打开固件文件对话框
@@ -978,14 +977,12 @@ function createMenu() {
           label: '固件更新',
           accelerator: 'CmdOrCtrl+U',
           click: async () => {
-            // 先关闭主界面的串口连接，释放端口占用
-            if (serialPort && serialPort.isOpen) {
-              console.log('[FIRMWARE] 正在关闭主界面串口...')
-              await closeSerialPort()
-              await delay(1000)
-              console.log('[FIRMWARE] 主界面串口已关闭')
-            }
-            createFirmwareWindow()
+            await dialog.showMessageBox(mainWindow || BrowserWindow.getAllWindows()[0], {
+              type: 'warning',
+              title: '功能暂不可用',
+              message: '固件更新功能未实现完整功能，待开发验证',
+              buttons: ['确定']
+            })
           }
         }
       ]
@@ -1207,8 +1204,9 @@ let firmwareAborted = false
  * 基于 serialport 的 NodeTransport，实现 esptool-js Transport 接口
  */
 class NodeTransport {
-  constructor(portPath) {
+  constructor(portPath, productId = 0) {
     this.portPath = portPath
+    this.productId = productId
     this.baudrate = 115200
     this.serialPort = null
     this.buffer = new Uint8Array(0)
@@ -1299,14 +1297,13 @@ class NodeTransport {
         const byte = readBytes[i]
         if (partialPacket === null) {
           if (byte === this.SLIP_END) {
-              partialPacket = new Uint8Array(0)
-            } else {
-              // 非 SLIP 数据（如芯片启动日志），抛出异常让 readPacket 重试
-              if (this.tracing) {
-                console.log('[NodeTransport] 收到无效数据（非 SLIP 包头）: 0x' + byte.toString(16))
-              }
-              throw new Error('Invalid head of packet (0x' + byte.toString(16) + '): Possible serial noise or corruption.')
+            partialPacket = new Uint8Array(0)
+          } else {
+            // 跳过非 SLIP 数据（如芯片启动日志），等待下一个 0xC0 包头
+            if (this.tracing) {
+              console.log('[NodeTransport] 跳过非 SLIP 数据: 0x' + byte.toString(16) + ' (' + String.fromCharCode(byte) + ')')
             }
+          }
         } else if (isEscaping) {
           isEscaping = false
           if (byte === this.SLIP_ESC_END) {
@@ -1424,9 +1421,9 @@ class NodeTransport {
     return `Serial port ${this.portPath}`
   }
 
-  /** 获取产品 ID（NodeTransport 不直接支持，返回 undefined） */
+  /** 获取产品 ID（用于 esptool-js 识别 USB-JTAG 设备，如 ESP32-C3 内置 USB-JTAG PID=0x1001） */
   getPid() {
-    return undefined
+    return this.productId || undefined
   }
 
   /** 跟踪日志输出 */
@@ -1486,7 +1483,12 @@ class NodeTransport {
     combined.set(arr2, arr1.length)
     return combined
   }
-  flushInput() { this.buffer = new Uint8Array(0) }
+  flushInput() {
+    this.buffer = new Uint8Array(0)
+    if (this.serialPort && this.serialPort.isOpen) {
+      try { this.serialPort.flush(() => {}) } catch (e) { /* ignore */ }
+    }
+  }
   inWaiting() { return this.buffer.length }
   peek() { return this.buffer }
 }
@@ -1528,7 +1530,7 @@ ipcMain.handle('firmware:list-ports', async () => {
 })
 
 /** 固件 IPC：开始烧录 */
-ipcMain.handle('firmware:start-flash', async (event, { portPath, fileArray, baudRate }) => {
+ipcMain.handle('firmware:start-flash', async (event, { portPath, fileArray, baudRate, productId, vendorId }) => {
   firmwareAborted = false
 
   let transport = null
@@ -1562,9 +1564,9 @@ ipcMain.handle('firmware:start-flash', async (event, { portPath, fileArray, baud
 
     // 创建 Transport + ESPLoader
     firmwareLog('创建 Transport 对象...')
-    transport = new NodeTransport(portPath)
+    transport = new NodeTransport(portPath, productId || 0)
     transport.tracing = true
-    firmwareLog('Transport 对象创建成功')
+    firmwareLog('Transport 对象创建成功 (productId=' + (productId || 0).toString(16) + ')')
 
     const ESPLoader = await getESPLoader()
     firmwareLog('创建 ESPLoader 对象...')
@@ -1641,17 +1643,24 @@ ipcMain.handle('firmware:start-flash', async (event, { portPath, fileArray, baud
 })
 
 /** 固件 IPC：擦除 Flash */
-ipcMain.handle('firmware:erase-flash', async (event, { portPath, baudRate }) => {
+ipcMain.handle('firmware:erase-flash', async (event, { portPath, baudRate, productId, vendorId }) => {
   firmwareAborted = false
 
   let transport = null
   let esploader = null
 
   try {
+    // 添加总超时（60秒），擦除可能更久
+    const ERASE_TIMEOUT = 60000
+    const eraseTimeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('操作超时（60秒）')), ERASE_TIMEOUT)
+    })
+
     firmwareLog('开始擦除 Flash...')
     firmwareProgress(0, '擦除中')
 
-    transport = new NodeTransport(portPath)
+    transport = new NodeTransport(portPath, productId || 0)
+    transport.tracing = true
     const ESPLoader = await getESPLoader()
     esploader = new ESPLoader({
       transport: transport,
@@ -1665,13 +1674,13 @@ ipcMain.handle('firmware:erase-flash', async (event, { portPath, baudRate }) => 
     })
 
     firmwareLog('正在连接芯片...')
-    await esploader.main()
+    await Promise.race([esploader.main(), eraseTimeoutPromise])
     firmwareLog('芯片连接成功')
 
     if (firmwareAborted) throw new Error('操作已中止')
 
     firmwareLog('正在擦除 Flash...')
-    await esploader.eraseFlash()
+    await Promise.race([esploader.eraseFlash(), eraseTimeoutPromise])
     firmwareLog('擦除完成')
 
     firmwareLog('正在复位设备...')
