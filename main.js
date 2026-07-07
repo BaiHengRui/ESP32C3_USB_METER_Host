@@ -117,8 +117,8 @@ function parseUSBCDCData(data) {
     const current = data.readFloatLE(offset)
     offset += 4
 
-    // power (4 bytes, float little-endian)
-    const power = data.readFloatLE(offset)
+    // power (4 bytes, float little-endian) — 固件发送的原始功率值，仅供参考
+    const rawPower = data.readFloatLE(offset)
     offset += 4
 
     // energy_mWh (4 bytes, float little-endian)
@@ -140,11 +140,24 @@ function parseUSBCDCData(data) {
     // current_direction (1 byte, bool)
     const currentDirection = data[offset] !== 0
 
-    // 温度范围验证
-    if (temperature < -40.0 || temperature > 125.0) {
-      console.log('温度异常:', temperature)
+    // === 宽松的数据有效性校验（仅过滤明显异常值） ===
+    // INA228 芯片支持范围
+    if (voltage < 0 || voltage > 85) {           // VBUS: 0~85V
+      console.log('电压超 INA228 范围:', voltage)
       return null
     }
+    if (current < -50 || current > 50) {         // 配合分流器，典型 ±32A
+      console.log('电流超范围:', current)
+      return null
+    }
+    if (temperature < -40 || temperature > 150) { // 芯片温度传感器
+      console.log('温度超 INA228 范围:', temperature)
+      return null
+    }
+
+    // === 功率修正 ===
+    // 固件发送的功率值可能不准，使用电压×电流计算更可靠
+    const power = voltage * current
 
     return {
       header,
