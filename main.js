@@ -5,7 +5,7 @@ const { SerialPort } = require('serialport')
 
 // 应用信息
 const APP_NAME = 'ESP32C3-METER 上位机'
-const APP_VERSION = '1.1.6Beta'
+const APP_VERSION = '1.2.0Beta'
 
 // 获取编译时间
 function getBuildTime() {

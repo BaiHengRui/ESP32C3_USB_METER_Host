@@ -150,23 +150,32 @@ ESP32C3_USB_METER_Host/
 ## 版本信息
 
 - 命名方式：项目名-v版本-系统-架构-类型.zip
-- 当前版本: 1.1.6Beta
+- 当前版本: 1.2.0Beta
 - 编译时间: 每次运行自动获取
 
 ## 更新日志
 
-### v1.1.6Beta (2026-07-08)
+### v1.2.0Beta (2026-07-08)
 
 **修复**
-- 修复主窗口连接芯片后日志显示 MAC 地址即白屏的问题（`processTextData` 全局 `dataBuffer` 污染）
-- 修复固件烧录窗口在 stub 上传阶段白屏卡死 → **Electron 28 WebSerial C++ 级崩溃**
+- 修复主窗口连接芯片后日志显示 MAC 地址即白屏（`processTextData` 全局 `dataBuffer` 污染）
+- 修复固件烧录窗口在 stub 上传阶段白屏卡死（**Electron 28 WebSerial C++ 级崩溃**）
+
+**架构重构 — 固件烧录**
 - 烧录引擎从渲染进程 WebSerial 迁移至**主进程 serialport npm 包**
-- 新增 `serialport-transport.js`：为 esptool-js 提供 Node.js serialport 适配层（SLIP 编解码 / DTR-RTS / 缓冲读取）
-- 新增 `firmware-flash.js`：主进程烧录/擦除逻辑，通过 IPC 向前端推送进度
+- 新增 `serialport-transport.js`：esptool-js 的 Node.js serialport 适配层（SLIP 编解码 / DTR-RTS / 缓冲读取）
+- 新增 `firmware-flash.js`：主进程烧录/擦除逻辑，IPC 推送进度
+- 固件窗口移除 WebSerial 授权流程，改为普通 COM 口下拉选择
 - 烧录前自动释放主界面串口，避免 COM 口冲突
-- 修复 SLIP 多包响应数据丢弃问题（芯片一次返回 8 个响应包时仅消费第 1 个）
-- 修复 ESP32-C3 USB-JTAG-Serial 复位序列（`'usb_reset'` 模式）
-- 终端输出增加缓冲机制，避免逐字符 DOM 更新风暴
+- 修复 SLIP 多包响应数据丢弃（芯片一次返回 8 个响应包时仅消费第 1 个）
+- 修复 ESP32-C3 USB-JTAG-Serial 复位序列
+- 终端输出缓冲机制，避免逐字符 DOM 更新风暴
+
+**功能改进**
+- 固件窗口默认三行分区（bootloader / partitions / firmware），预填正确地址
+- 分区表标题旁增加 `?` 提示图标，显示常用分区地址映射
+- 提示气泡适配亮色/暗色主题
+- 移除按钮横向排列，事件委托统一处理
 
 ### v1.1.4Beta
 
