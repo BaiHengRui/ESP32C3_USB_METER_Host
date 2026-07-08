@@ -161,7 +161,7 @@ ESP32C3_USB_METER_Host/
 - 修复主窗口连接芯片后日志显示 MAC 地址即白屏（`processTextData` 全局 `dataBuffer` 污染）
 - 修复固件烧录窗口在 stub 上传阶段白屏卡死（**Electron 28 WebSerial C++ 级崩溃**）
 
-**架构重构 — 固件烧录**
+**固件烧录**
 - 烧录引擎从渲染进程 WebSerial 迁移至**主进程 serialport npm 包**
 - 新增 `serialport-transport.js`：esptool-js 的 Node.js serialport 适配层（SLIP 编解码 / DTR-RTS / 缓冲读取）
 - 新增 `firmware-flash.js`：主进程烧录/擦除逻辑，IPC 推送进度
