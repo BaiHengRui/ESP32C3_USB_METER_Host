@@ -5,6 +5,7 @@
 const { SerialPortTransport } = require('./serialport-transport')
 
 let ESPLoader = null
+let UsbJtagSerialReset = null
 let esptoolReady = false
 
 // 动态加载 esptool-js (ESM 模块)
@@ -13,6 +14,7 @@ async function loadEsptool() {
   try {
     const mod = await import('esptool-js')
     ESPLoader = mod.ESPLoader
+    UsbJtagSerialReset = mod.UsbJtagSerialReset
     esptoolReady = true
     console.log('[FLASH] esptool-js 加载成功')
   } catch (e) {
@@ -107,15 +109,12 @@ async function flashFirmware(params, onProgress, onLog) {
       }
     })
 
-    // 复位设备
+    // 复位设备（使用 USB-JTAG-Serial 专用复位序列）
     onLog('正在复位设备...')
     onProgress(97, '正在复位设备...')
     try {
-      await transport.setRTS(true)
-      await transport.setDTR(false)
-      await new Promise(r => setTimeout(r, 100))
-      await transport.setRTS(false)
-      await transport.setDTR(false)
+      const usbReset = new UsbJtagSerialReset(transport)
+      await usbReset.reset()
       onLog('设备已复位')
     } catch (e) {
       onLog(`复位失败: ${e.message}，请手动复位设备`)
@@ -183,11 +182,8 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
     onLog('正在复位设备...')
     onProgress(90, '正在复位设备...')
     try {
-      await transport.setRTS(true)
-      await transport.setDTR(false)
-      await new Promise(r => setTimeout(r, 100))
-      await transport.setRTS(false)
-      await transport.setDTR(false)
+      const usbReset = new UsbJtagSerialReset(transport)
+      await usbReset.reset()
       onLog('设备已复位')
     } catch (e) {
       onLog(`复位失败: ${e.message}，请手动复位设备`)

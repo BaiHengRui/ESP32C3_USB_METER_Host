@@ -44,7 +44,7 @@ function appendLog(msg) {
 async function init() {
   elements = getElements()
   appendLog('初始化开始...')
-  appendLog('烧录引擎: 主进程 serialport（稳定方案）')
+  appendLog('烧录引擎: serialport')
 
   setupEventListeners()
   initTheme()

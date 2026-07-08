@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win"
+    "build:win": "electron-builder --win",
+    "postinstall": "patch-package"
   },
   "build": {
     "appId": "com.esp32c3.meter",
@@ -23,6 +24,9 @@
         }
       ]
     },
+    "asarUnpack": [
+      "node_modules/esptool-js/**"
+    ],
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
