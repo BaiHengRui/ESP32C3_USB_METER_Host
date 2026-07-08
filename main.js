@@ -197,7 +197,7 @@ function createMainWindow() {
     icon: path.join(__dirname, 'assets', 'icon.png')
   })
 
-  mainWindow.loadFile('index.html')
+  mainWindow.loadFile(path.join(__dirname, 'index.html'))
 
   // 窗口加载完成后发送当前主题
   mainWindow.webContents.on('did-finish-load', () => {
@@ -207,8 +207,11 @@ function createMainWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
     closeSerialPort()
-    if (curveWindow) {
+    if (curveWindow && !curveWindow.isDestroyed()) {
       curveWindow.close()
+    }
+    if (firmwareWindow && !firmwareWindow.isDestroyed()) {
+      firmwareWindow.close()
     }
   })
 }
@@ -240,7 +243,7 @@ function createCurveWindow() {
     }
   })
 
-  curveWindow.loadFile('curve.html')
+  curveWindow.loadFile(path.join(__dirname, 'curve.html'))
 
   // 为曲线窗口设置菜单
   const curveMenuTemplate = [
@@ -364,7 +367,7 @@ function createFirmwareWindow() {
     }
   })
 
-  firmwareWindow.loadFile('firmware.html')
+  firmwareWindow.loadFile(path.join(__dirname, 'firmware.html'))
 
   // 窗口加载完成后发送当前主题
   firmwareWindow.webContents.on('did-finish-load', () => {
@@ -1229,9 +1232,10 @@ app.on('activate', () => {
   }
 })
 
-// 应用退出前保存配置
+// 应用退出前清理
 app.on('before-quit', () => {
   addOperationLog('APP', 'QUIT', '应用程序即将退出')
+  closeSerialPort()
   saveConfig({ theme: currentTheme })
 })
 

@@ -11,7 +11,7 @@ let esptoolReady = false
 async function loadEsptool() {
   if (esptoolReady) return
   try {
-    const mod = await import('./node_modules/esptool-js/bundle.js')
+    const mod = await import('esptool-js')
     ESPLoader = mod.ESPLoader
     esptoolReady = true
     console.log('[FLASH] esptool-js 加载成功')
