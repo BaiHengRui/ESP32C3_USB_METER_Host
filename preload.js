@@ -97,32 +97,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getOperationLogs: () => ipcRenderer.invoke('get-operation-logs'),
   exportOperationLog: (filePath) => ipcRenderer.invoke('export-operation-log', { filePath }),
 
-  // 固件更新
+  // 固件更新（文件对话框 & 串口释放）
   openFirmwareDialog: () => ipcRenderer.invoke('open-firmware-dialog'),
   readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
   releaseMainPort: () => ipcRenderer.invoke('release-main-port'),
 
-  // 固件更新（主进程烧录 — 新方案）
-  firmwareListPorts: () => ipcRenderer.invoke('firmware:list-ports'),
-  firmwareStartFlash: (params) => ipcRenderer.invoke('firmware:start-flash', params),
-  firmwareEraseFlash: (params) => ipcRenderer.invoke('firmware:erase-flash', params),
-  firmwareStop: () => ipcRenderer.invoke('firmware:stop'),
+  // 固件烧录（主进程 serialport 方案，替代原 WebSerial）
+  flashFirmware: (params) => ipcRenderer.invoke('flash-firmware', params),
+  eraseFlash: (portPath) => ipcRenderer.invoke('erase-flash', portPath),
+  listSerialPorts: () => ipcRenderer.invoke('list-ports'),
 
-  // 固件更新事件
-  onFirmwareLog: (callback) => {
-    const listener = (_event, msg) => callback(msg)
-    ipcRenderer.on('firmware:log', listener)
-    return () => ipcRenderer.removeListener('firmware:log', listener)
+  // 烧录进度/日志事件
+  onFlashProgress: (callback) => {
+    const listener = (event, data) => callback(data)
+    ipcRenderer.on('flash-progress', listener)
+    return () => ipcRenderer.removeListener('flash-progress', listener)
   },
-  onFirmwareProgress: (callback) => {
-    const listener = (_event, data) => callback(data)
-    ipcRenderer.on('firmware:progress', listener)
-    return () => ipcRenderer.removeListener('firmware:progress', listener)
-  },
-  onFirmwareComplete: (callback) => {
-    const listener = (_event, data) => callback(data)
-    ipcRenderer.on('firmware:complete', listener)
-    return () => ipcRenderer.removeListener('firmware:complete', listener)
-  },
+  onFlashLog: (callback) => {
+    const listener = (event, data) => callback(data)
+    ipcRenderer.on('flash-log', listener)
+    return () => ipcRenderer.removeListener('flash-log', listener)
+  }
 })
 

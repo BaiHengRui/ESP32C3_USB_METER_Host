@@ -1,0 +1,215 @@
+// firmware-flash.js (主进程)
+// 使用 serialport + esptool-js 进行固件烧录
+// 通过 IPC 向前端发送进度
+
+const { SerialPortTransport } = require('./serialport-transport')
+
+let ESPLoader = null
+let esptoolReady = false
+
+// 动态加载 esptool-js (ESM 模块)
+async function loadEsptool() {
+  if (esptoolReady) return
+  try {
+    const mod = await import('./node_modules/esptool-js/bundle.js')
+    ESPLoader = mod.ESPLoader
+    esptoolReady = true
+    console.log('[FLASH] esptool-js 加载成功')
+  } catch (e) {
+    console.error('[FLASH] esptool-js 加载失败:', e.message)
+    throw e
+  }
+}
+
+/**
+ * 烧录固件
+ * @param {Object} params
+ * @param {string} params.portPath - COM 口路径
+ * @param {Array<{firmwareFile: string, address: string}>} params.partitions - 分区列表
+ * @param {Function} onProgress - 进度回调 (percent, message)
+ * @param {Function} onLog - 日志回调 (message)
+ */
+async function flashFirmware(params, onProgress, onLog) {
+  await loadEsptool()
+
+  const { portPath, partitions } = params
+
+  onLog('===== 开始烧录流程 =====')
+  onProgress(5, '正在初始化...')
+
+  // 终端输出缓冲
+  let terminalBuffer = ''
+  function flushTermBuf() {
+    if (terminalBuffer.length > 0) { onLog(terminalBuffer); terminalBuffer = '' }
+  }
+  function termWrite(data) {
+    if (typeof data !== 'string' || data.length === 0) return
+    if (data.includes('\n')) {
+      const parts = data.split('\n')
+      for (let i = 0; i < parts.length - 1; i++) { terminalBuffer += parts[i]; flushTermBuf() }
+      terminalBuffer += parts[parts.length - 1]
+    } else { terminalBuffer += data }
+    if (terminalBuffer.length >= 256) flushTermBuf()
+  }
+
+  const transport = new SerialPortTransport(portPath, 115200)
+
+  const esploader = new ESPLoader({
+    transport,
+    baudrate: 115200,
+    terminal: {
+      clean: () => { terminalBuffer = '' },
+      writeLine: (data) => { flushTermBuf(); onLog(data) },
+      write: (data) => termWrite(data)
+    }
+  })
+
+  try {
+    onLog('正在连接芯片...')
+    onProgress(8, '正在连接芯片...')
+
+    const chipName = await Promise.race([
+      esploader.main('usb_reset'),  // ESP32-C3 USB-JTAG-Serial 复位
+      new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时(120s)')), 120000))
+    ])
+    onLog(`✅ 检测到芯片: ${chipName}`)
+
+    // 读取固件文件
+    onLog('正在读取固件文件...')
+    onProgress(10, '正在读取固件...')
+
+    const fs = require('fs')
+    const fileDataArray = []
+    for (const part of partitions) {
+      const partName = part.firmwareFile.split(/[/\\]/).pop()
+      onLog(`  读取: ${partName}...`)
+      const buffer = fs.readFileSync(part.firmwareFile)
+      const data = new Uint8Array(buffer)
+      fileDataArray.push({ data, address: parseInt(part.address, 16) })
+      onLog(`  已加载: ${partName} -> ${part.address} (${data.length} 字节)`)
+    }
+
+    // 烧录
+    onLog('开始烧录固件...')
+    onProgress(12, '正在烧录固件...')
+
+    await esploader.writeFlash({
+      fileArray: fileDataArray,
+      flashMode: 'dio',
+      flashFreq: '80m',
+      flashSize: '4MB',
+      eraseAll: false,
+      compress: true,
+      reportProgress: (fileIndex, written, total) => {
+        const fileProgress = (written / total) * 100
+        const overallProgress = 12 + ((fileIndex + fileProgress / 100) / fileDataArray.length) * 83
+        onProgress(Math.min(overallProgress, 95), `烧录中... ${Math.floor(overallProgress)}%`)
+      }
+    })
+
+    // 复位
+    onLog('正在复位设备...')
+    onProgress(97, '正在复位设备...')
+    await esploader.after('hard_reset')
+
+    onProgress(100, '✅ 烧录完成！')
+    onLog('===== 烧录完成！ =====')
+    return { success: true }
+  } catch (err) {
+    onLog(`❌ 烧录失败: ${err.message}`)
+    console.error('[FLASH] 烧录失败:', err)
+    return { success: false, error: err.message }
+  } finally {
+    flushTermBuf()
+    try { await transport.disconnect() } catch (e) { /* ignore */ }
+  }
+}
+
+/**
+ * 擦除 Flash
+ */
+async function eraseFlashChip(portPath, onProgress, onLog) {
+  await loadEsptool()
+
+  onLog('===== 开始擦除 Flash =====')
+  onProgress(5, '正在初始化...')
+
+  // === 手动复位芯片进入下载模式 ===
+  onLog('正在复位芯片...')
+  const { SerialPort: SpErase } = require('serialport')
+  await new Promise((resolve) => {
+    const resetPort = new SpErase({ path: portPath, baudRate: 115200, autoOpen: false })
+    resetPort.open(async (err) => {
+      if (err) { onLog(`  复位端口打开失败: ${err.message}，跳过手动复位`); return resolve() }
+      try {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+        await new Promise(r => resetPort.set({ rts: false, dtr: false }, r))
+        await sleep(100)
+        await new Promise(r => resetPort.set({ dtr: true }, r))
+        await sleep(100)
+        await new Promise(r => resetPort.set({ rts: true, dtr: false }, r))
+        await new Promise(r => resetPort.set({ rts: true }, r))
+        await sleep(100)
+        await new Promise(r => resetPort.set({ rts: false, dtr: false }, r))
+        onLog('  复位序列已发送，等待芯片重新枚举...')
+      } catch (e) { onLog(`  复位序列异常: ${e.message}`) }
+      resetPort.close(() => resolve())
+    })
+  })
+  await new Promise(r => setTimeout(r, 2000))
+
+  let termBuf = ''
+  function flush() { if (termBuf.length > 0) { onLog(termBuf); termBuf = '' } }
+  function tw(data) {
+    if (typeof data !== 'string' || data.length === 0) return
+    if (data.includes('\n')) {
+      const p = data.split('\n')
+      for (let i = 0; i < p.length - 1; i++) { termBuf += p[i]; flush() }
+      termBuf += p[p.length - 1]
+    } else { termBuf += data }
+    if (termBuf.length >= 256) flush()
+  }
+
+  const transport = new SerialPortTransport(portPath, 115200)
+  const esploader = new ESPLoader({
+    transport,
+    baudrate: 115200,
+    terminal: {
+      clean: () => { termBuf = '' },
+      writeLine: (data) => { flush(); onLog(data) },
+      write: (data) => tw(data)
+    }
+  })
+
+  try {
+    onLog('正在连接芯片...')
+    onProgress(10, '正在连接芯片...')
+    const chipName = await Promise.race([
+      esploader.main('no_reset'),  // 芯片已手动复位
+      new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时(120s)')), 120000))
+    ])
+    onLog(`✅ 检测到芯片: ${chipName}`)
+
+    onLog('正在擦除 Flash（可能需要数十秒）...')
+    onProgress(20, '正在擦除 Flash...')
+    await esploader.eraseFlash()
+    onLog('擦除完成')
+
+    onLog('正在复位设备...')
+    onProgress(90, '正在复位设备...')
+    await esploader.after('hard_reset')
+
+    onProgress(100, '✅ 擦除完成！')
+    onLog('===== 擦除完成！ =====')
+    return { success: true }
+  } catch (err) {
+    onLog(`❌ 擦除失败: ${err.message}`)
+    console.error('[FLASH] 擦除失败:', err)
+    return { success: false, error: err.message }
+  } finally {
+    flush()
+    try { await transport.disconnect() } catch (e) { /* ignore */ }
+  }
+}
+
+module.exports = { flashFirmware, eraseFlashChip }
