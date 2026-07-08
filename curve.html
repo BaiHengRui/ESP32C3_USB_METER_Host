@@ -162,6 +162,12 @@
     canvas {
       max-width: 100%;
     }
+    .hint-text {
+      font-size: 10px;
+      color: var(--text-secondary);
+      opacity: 0.6;
+      margin-left: 8px;
+    }
   </style>
 </head>
 <body>
@@ -215,6 +221,8 @@
             <input type="checkbox" id="showMwhCheck">
             <label for="showMwhCheck">显示 mWh</label>
           </div>
+          <button id="autoFollowBtn" class="btn btn-info" style="font-size:11px;padding:3px 8px;">自动跟随 ✓</button>
+          <!-- <span class="hint-text">滚轮缩放 · 拖拽平移 · Shift+拖拽框选 · 双击/右键重置 · 拖动总览框定位</span> -->
           <div class="zoom-status-text" id="zoomStatusText">可视区间: 0.00 - 10.00 s</div>
         </div>
       </div>
@@ -299,7 +307,7 @@
     // 曲线窗口逻辑
     const MAX_POINTS = 500
 
-    // 数据存储
+    // 数据存储（L1：全局原始数据池，唯一真值）
     const dataStore = {
       timeData: [],
       systemTimeData: [],
@@ -312,12 +320,95 @@
       chargeMAhData: []
     }
 
+    // L2：双视图独立抽稀缓存（渲染专用，不修改原始数据）
+    const overviewCache = { time: [], voltage: [], current: [], power: [] }
+    const mainCache = { time: [], voltage: [], current: [], power: [], temperature: [], chargeMAh: [], energyMWh: [] }
+
+    // ========== 像素级极值抽稀（Min-Max per Pixel Bin） ==========
+    /**
+     * 将原始数据按目标像素宽度做极值分桶抽稀
+     * @param {number[]} timeArr - 时间数组
+     * @param {number[]} valArr - 数值数组
+     * @param {number} xMin - 可视区间左边界
+     * @param {number} xMax - 可视区间右边界
+     * @param {number} pixelWidth - 目标画布像素宽度
+     * @returns {{x:number, yMin:number, yMax:number}[]} 每个像素桶的极值对
+     */
+    function decimateMinMax(timeArr, valArr, xMin, xMax, pixelWidth) {
+      if (!timeArr || timeArr.length === 0) return []
+      const range = Math.max(0.001, xMax - xMin)
+      const binCount = Math.max(1, Math.min(pixelWidth, 2000))
+      const binWidth = range / binCount
+      const bins = new Array(binCount)
+      for (let i = 0; i < binCount; i++) {
+        bins[i] = { x: xMin + (i + 0.5) * binWidth, min: Infinity, max: -Infinity, count: 0 }
+      }
+
+      // 单次遍历分桶
+      for (let i = 0; i < timeArr.length; i++) {
+        const t = timeArr[i]
+        if (t < xMin || t > xMax) continue
+        const v = valArr[i]
+        if (!Number.isFinite(v)) continue
+        const binIdx = Math.min(binCount - 1, Math.floor((t - xMin) / binWidth))
+        if (bins[binIdx].min > v) bins[binIdx].min = v
+        if (bins[binIdx].max < v) bins[binIdx].max = v
+        bins[binIdx].count++
+      }
+
+      // 输出有效桶
+      const result = []
+      for (const b of bins) {
+        if (b.count > 0) {
+          result.push({ x: b.x, yMin: b.min, yMax: b.max })
+        }
+      }
+      return result
+    }
+
+    /**
+     * 重建总览抽稀缓存（对全量原始数据做粗粒度极值抽稀）
+     */
+    function rebuildOverviewCache() {
+      const timeData = getTimeDataSource()
+      const totalTime = timeData.length > 0 ? timeData[timeData.length - 1] : 0
+      const pixelW = Math.max(200, (overviewChart.canvas?.clientWidth || 500))
+
+      const vDec = decimateMinMax(timeData, dataStore.voltageData, 0, Math.max(totalTime, 1), pixelW)
+      const cDec = decimateMinMax(timeData, dataStore.currentData, 0, Math.max(totalTime, 1), pixelW)
+      const pDec = decimateMinMax(timeData, dataStore.powerData,  0, Math.max(totalTime, 1), pixelW)
+
+      overviewCache.time = vDec.map(d => d.x)
+      overviewCache.voltage = vDec
+      overviewCache.current = cDec
+      overviewCache.power = pDec
+    }
+
     // 状态变量
     let isStreaming = false
     let streamInterval = null
+    let autoFollow = true       // 录制时是否自动跟随最新数据（用户缩放/平移/框选后自动关闭）
+    let userInteracted = false  // 用户是否手动操作过视图
+    let recordingStartMs = null // 录制起始时间戳（ms），用于计算相对时间，保证X轴始终从0开始
+    let followWindowSize = 10   // 自动跟随时的窗口宽度（秒），滚轮缩放/框选时同步更新
 
-    // Y轴范围管理 - 使用智能计算（基于可见窗口内的数据极值）
+    // 缩放常量
+    const ZOOM_FACTOR = 1.15
+    const MIN_X_RANGE = 0.05    // 最小X区间（秒），防止缩到单点卡死
+    const MIN_Y_RANGE = 0.001   // 最小Y区间
 
+    // Y轴单向自适应量程
+    const yAxisExpandedRange = {
+      y: { min: undefined, max: undefined },
+      y1: { min: undefined, max: undefined },
+      y2: { min: undefined, max: undefined }
+    }
+
+    function resetYAxisExpandedRange() {
+      yAxisExpandedRange.y = { min: undefined, max: undefined }
+      yAxisExpandedRange.y1 = { min: undefined, max: undefined }
+      yAxisExpandedRange.y2 = { min: undefined, max: undefined }
+    }
     // DOM 元素
     const elements = {
       intervalSelect: document.getElementById('intervalSelect'),
@@ -331,6 +422,7 @@
       showMahCheck: document.getElementById('showMahCheck'),
       showMwhCheck: document.getElementById('showMwhCheck'),
       zoomStatusText: document.getElementById('zoomStatusText'),
+      autoFollowBtn: document.getElementById('autoFollowBtn'),
       statusLabel: document.getElementById('statusLabel'),
       voltageLabel: document.getElementById('voltageLabel'),
       currentLabel: document.getElementById('currentLabel'),
@@ -390,11 +482,6 @@
       }
     }
 
-    let userZoomed = false
-    let userZoomedY = false
-    // 用户设定的时间窗口大小（秒），滚轮控制此值
-    let selectionWindowSize = 10
-
     function clamp(value, min, max) {
       return Math.min(Math.max(value, min), max)
     }
@@ -445,7 +532,8 @@
     }
 
     /**
-     * 智能更新Y轴范围 - 基于可视区间内所有数据点计算
+     * 智能更新Y轴范围 - 单向自适应量程（只放大不缩小）
+     * 基于可视区间内所有数据点计算，min只降不升，max只升不降
      */
     function updateYAxisRangesSmart() {
       const xScale = mainChart.scales.x
@@ -459,20 +547,42 @@
       const vCurrent = getDataInRange(timeData, dataStore.currentData, viewMin, viewMax)
       const vPower = getDataInRange(timeData, dataStore.powerData, viewMin, viewMax)
 
+      /**
+       * 单向扩展应用：新计算的范围与历史最大范围比较，只放大不缩小
+       * @param {string} axisId - 轴ID (y/y1/y2)
+       * @param {{min:number, max:number}} computedRange - 当前窗口数据计算出的范围
+       */
+      function applyExpandOnly(axisId, computedRange) {
+        const tracked = yAxisExpandedRange[axisId]
+        let finalMin, finalMax
+
+        if (tracked.min === undefined || tracked.max === undefined) {
+          // 首次：直接使用计算范围
+          finalMin = computedRange.min
+          finalMax = computedRange.max
+        } else {
+          // min 只降不升，max 只升不降（始终向外扩展）
+          finalMin = Math.min(tracked.min, computedRange.min)
+          finalMax = Math.max(tracked.max, computedRange.max)
+        }
+
+        tracked.min = finalMin
+        tracked.max = finalMax
+        mainChart.options.scales[axisId].min = finalMin
+        mainChart.options.scales[axisId].max = finalMax
+      }
+
       // 电压轴
       const vRange = calcSmartYRange(vVoltage, 0.05)
-      mainChart.options.scales.y.min = vRange.min
-      mainChart.options.scales.y.max = vRange.max
+      applyExpandOnly('y', vRange)
 
       // 电流轴
       const cRange = calcSmartYRange(vCurrent, 0.08)
-      mainChart.options.scales.y1.min = cRange.min
-      mainChart.options.scales.y1.max = cRange.max
+      applyExpandOnly('y1', cRange)
 
       // 功率轴
       const pRange = calcSmartYRange(vPower, 0.08)
-      mainChart.options.scales.y2.min = pRange.min
-      mainChart.options.scales.y2.max = pRange.max
+      applyExpandOnly('y2', pRange)
     }
 
     /**
@@ -504,10 +614,9 @@
         tension = 0.05    // 低密度：更贴近原始数据
       }
 
-      // 根据密度决定是否显示数据点
-      const showPoints = density <= 8 && visiblePoints <= 80
-      const pointRadius = showPoints ? 2 : 0
-      const pointHoverRadius = showPoints ? 5 : 3
+      // 曲线不显示数据点，仅鼠标悬停时高亮当前点
+      const pointRadius = 0
+      const pointHoverRadius = 5
 
       mainChart.data.datasets.forEach(ds => {
         ds.tension = tension
@@ -519,6 +628,11 @@
 
     function rebuildChartData() {
       const timeData = getTimeDataSource()
+      const totalTime = timeData.length > 0 ? timeData[timeData.length - 1] : 10
+      const dataMin = timeData[0] || 0
+      const totalDataRange = Math.max(0.1, totalTime - dataMin)
+
+      // ===== 主视图数据：使用原始数据点（Chart.js 自行渲染） =====
       const voltagePoints = timeData.map((x, idx) => ({ x, y: dataStore.voltageData[idx] }))
       const currentPoints = timeData.map((x, idx) => ({ x, y: dataStore.currentData[idx] }))
       const powerPoints = timeData.map((x, idx) => ({ x, y: dataStore.powerData[idx] }))
@@ -533,53 +647,37 @@
       mainChart.data.datasets[4].data = chargeMAhPoints
       mainChart.data.datasets[5].data = energyMWhPoints
 
-      overviewChart.data.datasets[0].data = voltagePoints
-      overviewChart.data.datasets[1].data = currentPoints
-      overviewChart.data.datasets[2].data = powerPoints
+      // ===== 总览视图数据：全量极值抽稀 =====
+      rebuildOverviewCache()
+      overviewChart.data.datasets[0].data = overviewCache.voltage.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
+      overviewChart.data.datasets[1].data = overviewCache.current.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
+      overviewChart.data.datasets[2].data = overviewCache.power.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
 
-      const latestTime = timeData[timeData.length - 1] || 0
-      const dataMin = timeData[0] || 0
-      const totalDataRange = Math.max(1, latestTime - dataMin)
-
-      if (!userZoomed) {
-        // 未缩放模式：用当前窗口大小自动滚动显示最新数据
-        const windowSize = Math.min(selectionWindowSize, Math.max(10, totalDataRange))
-        selectionWindowSize = windowSize
-
-        if (latestTime <= windowSize) {
+      // ===== 主视图 X 轴区间管理 =====
+      if (autoFollow && isStreaming) {
+        // 自动跟随：保持当前窗口宽度，始终贴在右侧
+        followWindowSize = clamp(followWindowSize, MIN_X_RANGE, Math.max(MIN_X_RANGE, totalDataRange))
+        if (totalTime <= followWindowSize) {
           mainChart.options.scales.x.min = 0
-          mainChart.options.scales.x.max = Math.max(windowSize, latestTime || windowSize)
+          mainChart.options.scales.x.max = Math.max(followWindowSize, totalTime || followWindowSize)
         } else {
-          mainChart.options.scales.x.min = latestTime - windowSize
-          mainChart.options.scales.x.max = latestTime
+          mainChart.options.scales.x.min = totalTime - followWindowSize
+          mainChart.options.scales.x.max = totalTime
         }
-      } else {
-        // 用户已手动调整过窗口
-        const currentMin = mainChart.options.scales.x.min
-        const currentMax = mainChart.options.scales.x.max
-        const rightGap = latestTime - currentMax  // 新数据到窗口右侧的距离
-
-        // 如果用户窗口右侧紧贴数据末尾（用户在查看最新），新数据到来时自动右移
-        if (latestTime > currentMax && rightGap < selectionWindowSize * 0.05) {
-          const shift = latestTime - currentMax
-          mainChart.options.scales.x.min = currentMin + shift
-          mainChart.options.scales.x.max = latestTime
-        }
-        // 如果窗口比总数据范围还大，缩到总数据大小
-        if (selectionWindowSize > totalDataRange) {
-          selectionWindowSize = totalDataRange
-          mainChart.options.scales.x.min = dataMin
-          mainChart.options.scales.x.max = latestTime
-        }
+      } else if (!userInteracted && !isStreaming) {
+        // 回看模式无交互：显示全部数据
+        mainChart.options.scales.x.min = dataMin
+        mainChart.options.scales.x.max = Math.max(totalTime || 10, 10)
+        followWindowSize = totalDataRange
       }
+      // autoFollow=false 且 userInteracted=true：保持当前视图不变，不执行任何自动平移
 
+      // ===== 总览视图：X轴始终 0 ~ TotalTime（全量） =====
       overviewChart.options.scales.x.min = 0
-      overviewChart.options.scales.x.max = Math.max(latestTime || 10, 10)
+      overviewChart.options.scales.x.max = Math.max(totalTime, 10)
 
-      // 智能更新Y轴范围（仅在非手动缩放Y轴时）
-      if (!userZoomedY) {
-        updateYAxisRangesSmart()
-      }
+      // ===== Y轴始终智能更新（单向自适应量程，不受鼠标控制） =====
+      updateYAxisRangesSmart()
 
       // 更新曲线平滑度和点样式
       updateTensionAndPointStyle()
@@ -587,13 +685,14 @@
       mainChart.update('none')
       overviewChart.update('none')
       updateZoomStatus()
+      updateAutoFollowButton()
     }
 
     function updateZoomStatus() {
       const scale = mainChart.scales?.x
       const hasData = mainChart.data.datasets.some(d => Array.isArray(d.data) && d.data.length > 0)
       if (!hasData || !scale) {
-        elements.zoomStatusText.textContent = '窗口: 10.00 s | 无数据'
+        elements.zoomStatusText.textContent = '无数据'
         return
       }
 
@@ -605,165 +704,303 @@
         : 0
 
       const isFull = dataRange > 0 && viewWindow >= dataRange * 0.97
+      const followTag = autoFollow ? ' [跟随]' : ''
       elements.zoomStatusText.textContent =
-        `窗口: ${viewWindow.toFixed(2)} s | 范围: ${viewMin.toFixed(1)} ~ ${viewMax.toFixed(1)} s${isFull ? ' [全览]' : ''}`
+        `窗口: ${viewWindow.toFixed(2)}s | ${viewMin.toFixed(1)}~${viewMax.toFixed(1)}s${isFull ? ' [全览]' : ''}${followTag}`
+    }
+
+    function updateAutoFollowButton() {
+      const btn = elements.autoFollowBtn
+      if (!btn) return
+      if (autoFollow) {
+        btn.textContent = '自动跟随 ✓'
+        btn.className = 'btn btn-info'
+      } else {
+        btn.textContent = '自动跟随 ✗'
+        btn.className = 'btn btn-secondary'
+      }
     }
 
     function chartHasData(chart) {
       return chart.data.datasets.some(dataset => Array.isArray(dataset.data) && dataset.data.length > 0)
     }
 
-    /**
-     * 滚轮控制纵览图中的半透明窗口大小
-     * 向下滚 → 放大窗口（看更长时间范围）
-     * 向上滚 → 缩小窗口（看更短时间范围，更精细）
-     * 窗口以鼠标位置为中心缩放，最小1秒，最大为全部数据范围
-     */
-    function zoomTimeAxis(chart, deltaY, clientX) {
-      if (!chartHasData(chart)) return
+    // ========== 获取数据边界辅助函数 ==========
 
-      // 获取当前数据范围，作为最大窗口限制
+    function getDataBounds() {
       const timeData = getTimeDataSource()
-      const dataMin = timeData.length > 0 ? timeData[0] : 0
-      const dataMax = timeData.length > 0 ? timeData[timeData.length - 1] : 10
-      const totalRange = Math.max(1, dataMax - dataMin)
+      return {
+        dataMin: timeData.length > 0 ? timeData[0] : 0,
+        dataMax: timeData.length > 0 ? timeData[timeData.length - 1] : 10,
+        totalRange: timeData.length > 1 ? Math.max(0.1, timeData[timeData.length - 1] - timeData[0]) : 10
+      }
+    }
+
+    // ========== 1. 滚轮缩放（以光标为中心，XY同步） ==========
+
+    /**
+     * 以光标位置为中心，XY轴同步缩放
+     * @param {Chart} chart - 主图表
+     * @param {number} deltaY - 滚轮方向（负=向上放大，正=向下缩小）
+     * @param {number} clientX - 鼠标X坐标
+     * @param {number} clientY - 鼠标Y坐标
+     */
+    function zoomAtCursor(chart, deltaY, clientX, clientY) {
+      if (!chartHasData(chart)) return
 
       const xScale = chart.scales.x
       if (!xScale) return
 
-      // 计算当前窗口中心位置（以鼠标位置为中心，或当前视图中心）
       const rect = chart.canvas.getBoundingClientRect()
-      const mouseX = clientX - rect.left
-      const valueAtPointer = xScale.getValueForPixel(mouseX)
-      const viewCenter = (valueAtPointer !== undefined && valueAtPointer !== null)
-        ? valueAtPointer
-        : (Number.isFinite(xScale.min) ? xScale.min : 0) + selectionWindowSize / 2
+      const px = clientX - rect.left
 
-      // 平滑调整窗口大小
-      const speedFactor = Math.min(Math.abs(deltaY) / 100, 3)
-      const resizeFactor = deltaY > 0
-        ? 1 + 0.1 * speedFactor   // 向下滚 → 放大窗口
-        : 1 / (1 + 0.1 * speedFactor) // 向上滚 → 缩小窗口
+      // 获取光标在X轴的数据坐标 t
+      const t = xScale.getValueForPixel(px)
+      if (t === undefined || t === null) return
 
-      const newSize = selectionWindowSize * resizeFactor
+      const { dataMin, dataMax, totalRange } = getDataBounds()
 
-      // 约束到 [1秒, 总数据范围]
-      const minWindow = 1
-      const maxWindow = Math.max(minWindow, totalRange)
-      selectionWindowSize = clamp(newSize, minWindow, maxWindow)
+      // 缩放系数：向上滚(deltaY<0)=放大=收窄区间，向下滚(deltaY>0)=缩小=拓宽区间
+      const factor = deltaY < 0 ? 1 / ZOOM_FACTOR : ZOOM_FACTOR
 
-      // 根据窗口大小和中心位置计算新的X轴范围
-      let newMin = viewCenter - selectionWindowSize / 2
-      let newMax = viewCenter + selectionWindowSize / 2
+      // === X轴缩放 ===
+      const xCurMin = Number.isFinite(xScale.min) ? xScale.min : dataMin
+      const xCurMax = Number.isFinite(xScale.max) ? xScale.max : dataMax
+      const xRange = Math.max(0.001, xCurMax - xCurMin)
+      const newXRange = clamp(xRange * factor, Math.min(MIN_X_RANGE, totalRange), Math.min(totalRange, 999999))
+      // 以 t 为中心缩放：t到左右边界的距离等比缩放
+      const tRatio = (t - xCurMin) / xRange  // t 距离左边界的比例
+      let newXMin = t - newXRange * tRatio
+      let newXMax = t + newXRange * (1 - tRatio)
+      // 边界约束
+      if (newXMin < dataMin) { newXMin = dataMin; newXMax = dataMin + newXRange }
+      if (newXMax > dataMax) { newXMax = dataMax; newXMin = dataMax - newXRange }
+      // 最终 clamp
+      newXMin = Math.max(dataMin, newXMin)
+      newXMax = Math.min(dataMax, newXMax)
 
-      // 边界约束：不能超出数据范围
-      if (selectionWindowSize >= totalRange * 0.97) {
-        // 窗口接近或等于总览大小，直接显示全部数据
-        newMin = dataMin
-        newMax = dataMax
-        selectionWindowSize = totalRange  // 修正为实际总览大小
+      chart.options.scales.x.min = newXMin
+      chart.options.scales.x.max = newXMax
+
+      // 检测是否拖到最右侧（恢复自动跟随）
+      if (isStreaming && newXMax >= dataMax - 0.01) {
+        autoFollow = true
       } else {
-        if (newMin < dataMin) {
-          newMin = dataMin
-          newMax = dataMin + selectionWindowSize
-        }
-        if (newMax > dataMax) {
-          newMax = dataMax
-          newMin = dataMax - selectionWindowSize
-        }
+        autoFollow = false
       }
+      userInteracted = true
+      followWindowSize = Math.max(MIN_X_RANGE, newXMax - newXMin)
 
-      chart.options.scales.x.min = newMin
-      chart.options.scales.x.max = newMax
+      // Y轴始终自动管理（单向自适应量程）
+      updateYAxisRangesSmart()
+
       chart.update('none')
-      userZoomed = true
-      userZoomedY = false
+      overviewChart.update('none')
+      updateZoomStatus()
+      updateAutoFollowButton()
     }
 
-    /**
-     * 鼠标拖拽平移功能
-     */
-    function registerDragPan(chart) {
-      let isDragging = false
-      let startX = 0
-      let startMin = 0
-      let startMax = 0
+    // ========== 2. 左键拖拽平移（仅X轴） ==========
+
+    function registerPan(chart) {
+      let isPanning = false
+      let startClientX = 0
+      let startXMin = 0, startXMax = 0
 
       chart.canvas.addEventListener('mousedown', (evt) => {
-        if (evt.button !== 0) return // 只响应左键
-        // 检查是否在图表区域内
+        if (evt.button !== 0) return
+        // Shift/Ctrl + 左键留给框选，不作为平移
+        if (evt.shiftKey || evt.ctrlKey) return
         const rect = chart.canvas.getBoundingClientRect()
         if (evt.clientX < rect.left || evt.clientX > rect.right) return
+        if (evt.clientY < rect.top || evt.clientY > rect.bottom) return
 
-        isDragging = true
-        startX = evt.clientX
-        const scale = chart.scales.x
-        if (scale) {
-          startMin = Number.isFinite(scale.min) ? scale.min : 0
-          startMax = Number.isFinite(scale.max) ? scale.max : 10
-        }
+        isPanning = true
+        startClientX = evt.clientX
+        const xs = chart.scales.x
+        startXMin = Number.isFinite(xs?.min) ? xs.min : 0
+        startXMax = Number.isFinite(xs?.max) ? xs.max : 10
         chart.canvas.style.cursor = 'grabbing'
       })
 
       document.addEventListener('mousemove', (evt) => {
-        if (!isDragging) return
+        if (!isPanning) return
         evt.preventDefault()
 
-        const scale = chart.scales.x
-        if (!scale) return
+        const xs = chart.scales.x
+        if (!xs) return
 
         const rect = chart.canvas.getBoundingClientRect()
-        const pixelsPerUnit = (rect.right - rect.left) / (startMax - startMin)
-        const dx = (evt.clientX - startX) / pixelsPerUnit
+        const chartW = rect.right - rect.left
+        if (chartW <= 0) return
 
-        const dataMin = dataStore.timeData.length > 0 ? dataStore.timeData[0] : 0
-        const dataMax = dataStore.timeData.length > 0 ? dataStore.timeData[dataStore.timeData.length - 1] : 10
-        const range = startMax - startMin
+        // X轴：像素偏移 → 时间偏移
+        const pixelsPerUnitX = chartW / Math.max(0.001, startXMax - startXMin)
+        const dxData = (startClientX - evt.clientX) / pixelsPerUnitX
 
-        let newMin = startMin - dx
-        let newMax = startMax - dx
+        const { dataMin, dataMax } = getDataBounds()
+        const xRange = startXMax - startXMin
+        let newXMin = startXMin + dxData
+        let newXMax = startXMax + dxData
+        if (newXMin < dataMin) { newXMin = dataMin; newXMax = dataMin + xRange }
+        if (newXMax > dataMax) { newXMax = dataMax; newXMin = dataMax - xRange }
 
-        // 边界约束
-        if (newMin < dataMin) {
-          newMin = dataMin
-          newMax = dataMin + range
+        chart.options.scales.x.min = newXMin
+        chart.options.scales.x.max = newXMax
+
+        // 检测是否拖到最右侧
+        if (isStreaming && newXMax >= dataMax - 0.01) {
+          autoFollow = true
+        } else {
+          autoFollow = false
         }
-        if (newMax > dataMax) {
-          newMax = dataMax
-          newMin = dataMax - range
-        }
+        userInteracted = true
 
-        chart.options.scales.x.min = newMin
-        chart.options.scales.x.max = newMax
+        // Y轴始终自动管理
+        updateYAxisRangesSmart()
+
         chart.update('none')
-        userZoomed = true
+        overviewChart.update('none')
         updateZoomStatus()
+        updateAutoFollowButton()
       })
 
       document.addEventListener('mouseup', () => {
-        if (isDragging) {
-          isDragging = false
+        if (isPanning) {
+          isPanning = false
           chart.canvas.style.cursor = ''
-          overviewChart.update('none')  // 刷新纵览图的选择窗口
+          overviewChart.update('none')
         }
       })
     }
 
-    /**
-     * 滚轮缩放：缩放主图后，刷新纵览图的选择窗口显示
-     */
+    // ========== 3. 左键框选区域放大 ==========
+
+    const selectionRectPlugin = {
+      id: 'selectionRectPlugin',
+      afterDraw(chart, args, options) {
+        if (!options || !options.active || options.x1 == null) return
+        const ctx = chart.ctx
+        const x1 = Math.min(options.x1, options.x2)
+        const y1 = Math.min(options.y1, options.y2)
+        const x2 = Math.max(options.x1, options.x2)
+        const y2 = Math.max(options.y1, options.y2)
+        const w = x2 - x1
+        const h = y2 - y1
+        if (w < 3 && h < 3) return
+
+        ctx.save()
+        ctx.fillStyle = 'rgba(0, 217, 255, 0.10)'
+        ctx.fillRect(x1, y1, w, h)
+        ctx.strokeStyle = 'rgba(0, 217, 255, 0.60)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([5, 3])
+        ctx.strokeRect(x1, y1, w, h)
+        ctx.restore()
+      }
+    }
+
+    function registerSelectionZoom(chart) {
+      let isSelecting = false
+      let selStartX = 0, selStartY = 0
+      let selCurX = 0, selCurY = 0
+
+      chart.canvas.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return
+        const rect = chart.canvas.getBoundingClientRect()
+        if (evt.clientX < rect.left || evt.clientX > rect.right) return
+        if (evt.clientY < rect.top || evt.clientY > rect.bottom) return
+        if (!chartHasData(chart)) return
+
+        // 使用 Shift 键或 Ctrl 键触发框选，避免和拖拽平移冲突
+        if (!evt.shiftKey && !evt.ctrlKey) return
+
+        isSelecting = true
+        selStartX = evt.clientX - rect.left
+        selStartY = evt.clientY - rect.top
+        selCurX = selStartX
+        selCurY = selStartY
+        chart.options.plugins.selectionRectPlugin = {
+          active: true, x1: selStartX, y1: selStartY, x2: selCurX, y2: selCurY
+        }
+        chart.update('none')
+      })
+
+      document.addEventListener('mousemove', (evt) => {
+        if (!isSelecting) return
+        const rect = chart.canvas.getBoundingClientRect()
+        selCurX = evt.clientX - rect.left
+        selCurY = evt.clientY - rect.top
+        chart.options.plugins.selectionRectPlugin = {
+          active: true, x1: selStartX, y1: selStartY, x2: selCurX, y2: selCurY
+        }
+        chart.update('none')
+      })
+
+      document.addEventListener('mouseup', (evt) => {
+        if (!isSelecting) return
+        isSelecting = false
+
+        const rect = chart.canvas.getBoundingClientRect()
+        const ex = evt.clientX - rect.left
+        const ey = evt.clientY - rect.top
+        const dx = Math.abs(ex - selStartX)
+        const dy = Math.abs(ey - selStartY)
+
+        // 最小选区阈值，太小视为误触
+        if (dx < 5 && dy < 5) {
+          chart.options.plugins.selectionRectPlugin = { active: false }
+          chart.update('none')
+          return
+        }
+
+        // 像素坐标转数据坐标
+        const xs = chart.scales.x
+        if (!xs) return
+        const t1 = xs.getValueForPixel(Math.min(selStartX, ex))
+        const t2 = xs.getValueForPixel(Math.max(selStartX, ex))
+        if (t1 == null || t2 == null) {
+          chart.options.plugins.selectionRectPlugin = { active: false }
+          chart.update('none')
+          return
+        }
+
+        const { dataMin, dataMax } = getDataBounds()
+        let newXMin = clamp(t1, dataMin, dataMax)
+        let newXMax = clamp(t2, dataMin, dataMax)
+        if (newXMax - newXMin < MIN_X_RANGE) {
+          const mid = (newXMin + newXMax) / 2
+          newXMin = Math.max(dataMin, mid - MIN_X_RANGE / 2)
+          newXMax = Math.min(dataMax, mid + MIN_X_RANGE / 2)
+        }
+
+        chart.options.scales.x.min = newXMin
+        chart.options.scales.x.max = newXMax
+
+        autoFollow = false
+        userInteracted = true
+        followWindowSize = Math.max(MIN_X_RANGE, newXMax - newXMin)
+
+        // Y轴始终自动管理
+        updateYAxisRangesSmart()
+
+        chart.options.plugins.selectionRectPlugin = { active: false }
+        chart.update('none')
+        overviewChart.update('none')
+        updateZoomStatus()
+        updateAutoFollowButton()
+      })
+    }
+
+    // ========== 滚轮事件注册 ==========
+
     function registerWheelZoom(chart) {
       let wheelTimeout = null
       chart.canvas.addEventListener('wheel', (evt) => {
-        if (!chartHasData(chart)) {
-          evt.preventDefault()
-          return
-        }
+        if (!chartHasData(chart)) { evt.preventDefault(); return }
         evt.preventDefault()
+        zoomAtCursor(chart, evt.deltaY, evt.clientX, evt.clientY)
 
-        zoomTimeAxis(chart, evt.deltaY, evt.clientX)
-
-        // 节流刷新纵览图的选择窗口
         if (wheelTimeout) clearTimeout(wheelTimeout)
         wheelTimeout = setTimeout(() => {
           overviewChart.update('none')
@@ -772,83 +1009,173 @@
       }, { passive: false })
     }
 
-    /**
-     * 双击重置缩放
-     */
-    function registerDblClickReset(chart) {
-      chart.canvas.addEventListener('dblclick', () => {
-        userZoomed = false
-        userZoomedY = false
-        selectionWindowSize = 10
-        const dataMax = dataStore.timeData.length > 0
-          ? dataStore.timeData[dataStore.timeData.length - 1]
-          : 10
-        const windowSize = Math.max(10, dataMax)
-        if (dataMax <= windowSize) {
-          chart.options.scales.x.min = 0
-          chart.options.scales.x.max = Math.max(windowSize, dataMax)
-        } else {
-          chart.options.scales.x.min = dataMax - windowSize
-          chart.options.scales.x.max = dataMax
-        }
-        chart.update('none')
-        overviewChart.update('none')
-        updateZoomStatus()
+    // ========== 双击/右键重置 ==========
+
+    function registerReset(chart) {
+      chart.canvas.addEventListener('dblclick', () => resetViewFull())
+      chart.canvas.addEventListener('contextmenu', (evt) => {
+        evt.preventDefault()
+        resetViewFull()
       })
     }
 
-    /**
-     * 纵览图单击跳转：点击纵览图的某个位置，主图视图跳转到对应时间区域
-     */
-    function registerOverviewClick(chart) {
-      chart.canvas.addEventListener('click', (evt) => {
+    function resetViewFull() {
+      autoFollow = isStreaming  // 录制中恢复跟随，回看中显示全量
+      userInteracted = false
+      resetYAxisExpandedRange()
+
+      const { dataMin, dataMax, totalRange } = getDataBounds()
+      if (autoFollow && dataMax > 10) {
+        followWindowSize = 10
+        mainChart.options.scales.x.min = dataMax - 10
+        mainChart.options.scales.x.max = dataMax
+      } else {
+        followWindowSize = Math.max(10, totalRange)
+        mainChart.options.scales.x.min = dataMin
+        mainChart.options.scales.x.max = Math.max(dataMax || 10, 10)
+      }
+
+      // 重置所有Y轴
+      ;['y', 'y1', 'y2', 'y3', 'y4', 'y5'].forEach(id => {
+        mainChart.options.scales[id].min = undefined
+        mainChart.options.scales[id].max = undefined
+      })
+
+      mainChart.update('none')
+      overviewChart.update('none')
+      updateZoomStatus()
+      updateAutoFollowButton()
+    }
+
+    // ========== 纵览图单击跳转 ==========
+
+    // ========== 总览图交互：单击跳转 + 拖动高亮框 ==========
+
+    const overviewDragState = { active: false, mode: null, startX: 0, startMainMin: 0, startMainMax: 0 }
+    const EDGE_THRESHOLD = 8  // 边缘检测像素阈值
+
+    function registerOverviewInteraction(chart) {
+      chart.canvas.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return
         if (!chartHasData(chart)) return
 
         const rect = chart.canvas.getBoundingClientRect()
-        const mouseX = evt.clientX - rect.left
+        const mx = evt.clientX - rect.left
         const xScale = chart.scales.x
-        if (!xScale) return
+        const mainX = mainChart.scales.x
+        if (!xScale || !mainX) return
 
-        // 获取点击位置对应的时间值
-        const clickValue = xScale.getValueForPixel(mouseX)
-        if (clickValue === undefined || clickValue === null) return
+        const highlightLeft = xScale.getPixelForValue(mainX.min)
+        const highlightRight = xScale.getPixelForValue(mainX.max)
+        if (highlightLeft == null || highlightRight == null) return
 
-        // 使用当前窗口大小，以点击位置为中心重新定位
-        const dataMin = dataStore.timeData.length > 0 ? dataStore.timeData[0] : 0
-        const dataMax = dataStore.timeData.length > 0 ? dataStore.timeData[dataStore.timeData.length - 1] : 10
+        // 检测是否在拖拽区域
+        const nearLeft = Math.abs(mx - highlightLeft) < EDGE_THRESHOLD
+        const nearRight = Math.abs(mx - highlightRight) < EDGE_THRESHOLD
+        const inside = mx >= highlightLeft && mx <= highlightRight
 
-        let newMin = clickValue - selectionWindowSize / 2
-        let newMax = clickValue + selectionWindowSize / 2
-
-        // 边界约束
-        const totalRange = Math.max(1, dataMax - dataMin)
-        if (selectionWindowSize >= totalRange * 0.97) {
-          newMin = dataMin
-          newMax = dataMax
+        if (nearLeft) {
+          overviewDragState.active = true
+          overviewDragState.mode = 'left'
+        } else if (nearRight) {
+          overviewDragState.active = true
+          overviewDragState.mode = 'right'
+        } else if (inside) {
+          overviewDragState.active = true
+          overviewDragState.mode = 'move'
         } else {
-          if (newMin < dataMin) { newMin = dataMin; newMax = dataMin + selectionWindowSize }
-          if (newMax > dataMax) { newMax = dataMax; newMin = dataMax - selectionWindowSize }
+          // 单击跳转
+          const clickValue = xScale.getValueForPixel(mx)
+          if (clickValue == null) return
+          const { dataMin, dataMax } = getDataBounds()
+          const currentRange = mainX.max - mainX.min
+          let newMin = clickValue - currentRange / 2
+          let newMax = clickValue + currentRange / 2
+          if (newMin < dataMin) { newMin = dataMin; newMax = dataMin + currentRange }
+          if (newMax > dataMax) { newMax = dataMax; newMin = dataMax - currentRange }
+          mainChart.options.scales.x.min = newMin
+          mainChart.options.scales.x.max = newMax
+          autoFollow = false
+          userInteracted = true
+          followWindowSize = Math.max(MIN_X_RANGE, newMax - newMin)
+          updateYAxisRangesSmart()
+          mainChart.update('none')
+          chart.update('none')
+          updateZoomStatus()
+          updateAutoFollowButton()
+          return
         }
 
-        mainChart.options.scales.x.min = newMin
-        mainChart.options.scales.x.max = newMax
-        mainChart.update('none')
-        overviewChart.update('none')
-        userZoomed = true
-        updateZoomStatus()
+        overviewDragState.startX = mx
+        overviewDragState.startMainMin = mainX.min
+        overviewDragState.startMainMax = mainX.max
+        chart.canvas.style.cursor = 'ew-resize'
       })
 
-      // 鼠标悬停时改变光标样式，提示可点击
-      chart.canvas.addEventListener('mousemove', (evt) => {
+      document.addEventListener('mousemove', (evt) => {
         const rect = chart.canvas.getBoundingClientRect()
+        const mx = evt.clientX - rect.left
         const xScale = chart.scales.x
-        if (!xScale) return
-        const mouseX = evt.clientX - rect.left
-        const clickValue = xScale.getValueForPixel(mouseX)
-        if (clickValue !== undefined && clickValue !== null) {
-          chart.canvas.style.cursor = 'pointer'
+        const mainX = mainChart.scales.x
+
+        if (overviewDragState.active) {
+          if (!xScale || !mainX) return
+          const clickValue = xScale.getValueForPixel(mx)
+          if (clickValue == null) return
+          const { dataMin, dataMax } = getDataBounds()
+
+          if (overviewDragState.mode === 'move') {
+            const dx = clickValue - xScale.getValueForPixel(overviewDragState.startX)
+            const range = overviewDragState.startMainMax - overviewDragState.startMainMin
+            let newMin = overviewDragState.startMainMin + dx
+            let newMax = overviewDragState.startMainMax + dx
+            if (newMin < dataMin) { newMin = dataMin; newMax = dataMin + range }
+            if (newMax > dataMax) { newMax = dataMax; newMin = dataMax - range }
+            mainChart.options.scales.x.min = newMin
+            mainChart.options.scales.x.max = newMax
+          } else if (overviewDragState.mode === 'left') {
+            let newMin = clickValue
+            if (newMin < dataMin) newMin = dataMin
+            if (newMin >= overviewDragState.startMainMax - MIN_X_RANGE) newMin = overviewDragState.startMainMax - MIN_X_RANGE
+            mainChart.options.scales.x.min = newMin
+          } else if (overviewDragState.mode === 'right') {
+            let newMax = clickValue
+            if (newMax > dataMax) newMax = dataMax
+            if (newMax <= overviewDragState.startMainMin + MIN_X_RANGE) newMax = overviewDragState.startMainMin + MIN_X_RANGE
+            mainChart.options.scales.x.max = newMax
+          }
+
+          autoFollow = false
+          userInteracted = true
+          followWindowSize = Math.max(MIN_X_RANGE, mainChart.options.scales.x.max - mainChart.options.scales.x.min)
+          updateYAxisRangesSmart()
+          mainChart.update('none')
+          chart.update('none')
+          updateZoomStatus()
+          updateAutoFollowButton()
+          return
+        }
+
+        // 鼠标悬停：根据位置改变光标
+        if (!xScale || !mainX || !chartHasData(chart)) return
+        const hl = xScale.getPixelForValue(mainX.min)
+        const hr = xScale.getPixelForValue(mainX.max)
+        if (hl == null || hr == null) return
+        if (Math.abs(mx - hl) < EDGE_THRESHOLD || Math.abs(mx - hr) < EDGE_THRESHOLD) {
+          chart.canvas.style.cursor = 'ew-resize'
+        } else if (mx >= hl && mx <= hr) {
+          chart.canvas.style.cursor = 'grab'
         } else {
+          chart.canvas.style.cursor = 'pointer'
+        }
+      })
+
+      document.addEventListener('mouseup', () => {
+        if (overviewDragState.active) {
+          overviewDragState.active = false
+          overviewDragState.mode = null
           chart.canvas.style.cursor = ''
+          chart.update('none')
         }
       })
     }
@@ -869,7 +1196,7 @@
             pointBorderColor: chartConfig.voltage.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y'
           },
@@ -882,7 +1209,7 @@
             pointBorderColor: chartConfig.current.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y1'
           },
@@ -895,7 +1222,7 @@
             pointBorderColor: chartConfig.power.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y2'
           },
@@ -908,7 +1235,7 @@
             pointBorderColor: chartConfig.temperature.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y3',
             hidden: true
@@ -922,7 +1249,7 @@
             pointBorderColor: chartConfig.chargeMAh.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y4',
             hidden: true
@@ -936,7 +1263,7 @@
             pointBorderColor: chartConfig.energyMWh.color,
             borderWidth: 2,
             pointRadius: 0,
-            pointHoverRadius: 0,
+            pointHoverRadius: 5,
             tension: 0.1,
             yAxisID: 'y5',
             hidden: true
@@ -982,8 +1309,11 @@
               },
               mode: 'x',
               onZoom: ({ chart }) => {
-                userZoomed = true
-                userZoomedY = false
+                userInteracted = true
+                autoFollow = false
+                const xs = chart.scales.x
+                if (xs) followWindowSize = Math.max(MIN_X_RANGE, (xs.max || 10) - (xs.min || 0))
+                updateAutoFollowButton()
               },
               onZoomComplete: ({ chart }) => {
                 overviewChart.update('none')  // 刷新纵览图的选择窗口
@@ -1071,8 +1401,11 @@
           }
         }
       },
-      plugins: [crosshairPlugin]
+      plugins: [crosshairPlugin, selectionRectPlugin]
     })
+
+    // 初始化框选插件选项
+    mainChart.options.plugins.selectionRectPlugin = { active: false }
 
     const overviewSelectionPlugin = {
       id: 'overviewSelectionPlugin',
@@ -1230,23 +1563,28 @@
           }
         },
         elements: {
-          point: { radius: 0 },
-          line: { borderWidth: 1 }
+          point: { radius: 1, hoverRadius: 3 },
+          line: { borderWidth: 1.2, spanGaps: true }
         }
       },
       plugins: [overviewSelectionPlugin]
     })
 
-    // 主图：滚轮缩放 + 拖拽平移 + 双击重置
+    // 主图：滚轮缩放 + 拖拽平移 + 框选放大 + 双击/右键重置
     registerWheelZoom(mainChart)
-    registerDragPan(mainChart)
-    registerDblClickReset(mainChart)
-    // 纵览图：点击跳转（单击定位主图视图）
-    registerOverviewClick(overviewChart)
+    registerPan(mainChart)
+    registerSelectionZoom(mainChart)
+    registerReset(mainChart)
+    // 纵览图：单击跳转 + 拖动高亮框
+    registerOverviewInteraction(overviewChart)
 
     // 更新图表数据
     function updateCharts(data) {
-      const timeSeconds = data.timeMs / 1000.0
+      // 以首个采样点为时间零点，保证X轴始终从0开始从左到右
+      if (recordingStartMs === null) {
+        recordingStartMs = data.timeMs
+      }
+      const timeSeconds = (data.timeMs - recordingStartMs) / 1000.0
 
       // 添加数据
       const systemTimeSeconds = Date.now() / 1000
@@ -1310,8 +1648,10 @@
       if (isStreaming) {
         stopStreaming()
       } else {
-        userZoomed = false
-        userZoomedY = false
+        autoFollow = true
+        userInteracted = false
+        followWindowSize = 10
+        updateAutoFollowButton()
         await startStreaming()
       }
     }
@@ -1325,6 +1665,9 @@
         return
       }
 
+      resetYAxisExpandedRange()
+      recordingStartMs = null
+      followWindowSize = 10
       isStreaming = true
       elements.toggleStreamBtn.textContent = '停止采集'
       elements.toggleStreamBtn.className = 'btn btn-danger'
@@ -1358,10 +1701,14 @@
       Object.keys(dataStore).forEach(key => {
         dataStore[key] = []
       })
+      // 清空抽稀缓存
+      overviewCache.time = []; overviewCache.voltage = []; overviewCache.current = []; overviewCache.power = []
+      mainCache.time = []; mainCache.voltage = []; mainCache.current = []; mainCache.power = []
 
-      userZoomed = false
-      userZoomedY = false
-      selectionWindowSize = 10
+      autoFollow = true
+      userInteracted = false
+      recordingStartMs = null
+      followWindowSize = 10
       mainChart.data.labels = []
       mainChart.data.datasets.forEach(ds => ds.data = [])
       overviewChart.data.labels = []
@@ -1375,10 +1722,12 @@
         mainChart.options.scales[id].min = undefined
         mainChart.options.scales[id].max = undefined
       })
+      resetYAxisExpandedRange()
 
       mainChart.update('none')
       overviewChart.update('none')
       updateZoomStatus()
+      updateAutoFollowButton()
 
       elements.countLabel.textContent = '0'
       elements.hexDisplay.textContent = '等待开始采集...'
@@ -1386,25 +1735,7 @@
 
     // 重置视图
     function resetView() {
-      userZoomed = false
-      userZoomedY = false
-      selectionWindowSize = 10
-      const dataMax = dataStore.timeData.length > 0
-        ? dataStore.timeData[dataStore.timeData.length - 1]
-        : 10
-      const windowSize = Math.max(10, dataMax)
-      if (dataMax <= windowSize) {
-        mainChart.options.scales.x.min = 0
-        mainChart.options.scales.x.max = Math.max(windowSize, dataMax)
-      } else {
-        mainChart.options.scales.x.min = dataMax - windowSize
-        mainChart.options.scales.x.max = dataMax
-      }
-      overviewChart.options.scales.x.min = 0
-      overviewChart.options.scales.x.max = Math.max(dataMax || 10, 10)
-      mainChart.update('none')
-      overviewChart.update('none')
-      updateZoomStatus()
+      resetViewFull()
     }
 
     // 保存数据
@@ -1494,7 +1825,21 @@
     elements.showMahCheck.addEventListener('change', (e) => toggleDataset(4, e.target.checked))
     elements.showMwhCheck.addEventListener('change', (e) => toggleDataset(5, e.target.checked))
     elements.useSystemTimeCheck.addEventListener('change', () => {
-      userZoomed = false
+      autoFollow = true
+      userInteracted = false
+      followWindowSize = 10
+      rebuildChartData()
+    })
+
+    // 自动跟随按钮：保持当前窗口宽度，跳至最右侧
+    elements.autoFollowBtn.addEventListener('click', () => {
+      if (autoFollow) return
+      const timeData = getTimeDataSource()
+      const totalTime = timeData.length > 0 ? timeData[timeData.length - 1] : 0
+      followWindowSize = clamp(followWindowSize, MIN_X_RANGE, Math.max(MIN_X_RANGE, totalTime))
+      autoFollow = true
+      userInteracted = false
+      resetYAxisExpandedRange()
       rebuildChartData()
     })
 
@@ -1537,6 +1882,7 @@
 
     // 启动时初始化主题
     initTheme()
+    updateAutoFollowButton()
   </script>
 </body>
 </html>
