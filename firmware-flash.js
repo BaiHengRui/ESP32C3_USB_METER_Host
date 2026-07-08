@@ -107,10 +107,19 @@ async function flashFirmware(params, onProgress, onLog) {
       }
     })
 
-    // 复位
+    // 复位设备
     onLog('正在复位设备...')
     onProgress(97, '正在复位设备...')
-    await esploader.after('hard_reset')
+    try {
+      await transport.setRTS(true)
+      await transport.setDTR(false)
+      await new Promise(r => setTimeout(r, 100))
+      await transport.setRTS(false)
+      await transport.setDTR(false)
+      onLog('设备已复位')
+    } catch (e) {
+      onLog(`复位失败: ${e.message}，请手动复位设备`)
+    }
 
     onProgress(100, '✅ 烧录完成！')
     onLog('===== 烧录完成！ =====')
@@ -133,30 +142,6 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
 
   onLog('===== 开始擦除 Flash =====')
   onProgress(5, '正在初始化...')
-
-  // === 手动复位芯片进入下载模式 ===
-  onLog('正在复位芯片...')
-  const { SerialPort: SpErase } = require('serialport')
-  await new Promise((resolve) => {
-    const resetPort = new SpErase({ path: portPath, baudRate: 115200, autoOpen: false })
-    resetPort.open(async (err) => {
-      if (err) { onLog(`  复位端口打开失败: ${err.message}，跳过手动复位`); return resolve() }
-      try {
-        const sleep = (ms) => new Promise(r => setTimeout(r, ms))
-        await new Promise(r => resetPort.set({ rts: false, dtr: false }, r))
-        await sleep(100)
-        await new Promise(r => resetPort.set({ dtr: true }, r))
-        await sleep(100)
-        await new Promise(r => resetPort.set({ rts: true, dtr: false }, r))
-        await new Promise(r => resetPort.set({ rts: true }, r))
-        await sleep(100)
-        await new Promise(r => resetPort.set({ rts: false, dtr: false }, r))
-        onLog('  复位序列已发送，等待芯片重新枚举...')
-      } catch (e) { onLog(`  复位序列异常: ${e.message}`) }
-      resetPort.close(() => resolve())
-    })
-  })
-  await new Promise(r => setTimeout(r, 2000))
 
   let termBuf = ''
   function flush() { if (termBuf.length > 0) { onLog(termBuf); termBuf = '' } }
@@ -185,7 +170,7 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
     onLog('正在连接芯片...')
     onProgress(10, '正在连接芯片...')
     const chipName = await Promise.race([
-      esploader.main('no_reset'),  // 芯片已手动复位
+      esploader.main('usb_reset'),  // ESP32-C3 USB-JTAG-Serial 复位
       new Promise((_, reject) => setTimeout(() => reject(new Error('连接超时(120s)')), 120000))
     ])
     onLog(`✅ 检测到芯片: ${chipName}`)
@@ -197,7 +182,16 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
 
     onLog('正在复位设备...')
     onProgress(90, '正在复位设备...')
-    await esploader.after('hard_reset')
+    try {
+      await transport.setRTS(true)
+      await transport.setDTR(false)
+      await new Promise(r => setTimeout(r, 100))
+      await transport.setRTS(false)
+      await transport.setDTR(false)
+      onLog('设备已复位')
+    } catch (e) {
+      onLog(`复位失败: ${e.message}，请手动复位设备`)
+    }
 
     onProgress(100, '✅ 擦除完成！')
     onLog('===== 擦除完成！ =====')
