@@ -7,6 +7,7 @@
 - **串口通信**: 支持多种波特率，实时双向数据传输
 - **实时曲线**: 电压、电流、功率、温度等多参数实时图表显示
 - **数据导出**: 支持将数据保存为 CSV 格式，曲线保存为 PNG 图片
+- **固件更新**: 内置 esptool-js 烧录引擎，支持固件烧录和 Flash 擦除
 - **主题切换**: 支持亮色/暗色主题，可跟随系统设置
 - **日志记录**: 串口日志和操作日志保存功能
 
@@ -121,14 +122,18 @@ npm run build:linux
 
 ```
 ESP32C3_USB_METER_Host/
-├── main.js          # 主进程入口
-├── preload.js       # 预加载脚本
-├── renderer.js      # 主窗口渲染进程
-├── index.html       # 主窗口页面
-├── curve.html       # 曲线窗口页面
-├── styles.css       # 样式文件
-├── start.bat        # Windows启动脚本
-└── package.json     # 项目配置
+├── main.js                   # 主进程入口（串口通信 + 固件烧录 IPC）
+├── preload.js                # 预加载脚本（IPC 桥接）
+├── renderer.js               # 主窗口渲染进程
+├── firmware-renderer.js      # 固件窗口渲染进程（IPC 方案）
+├── firmware-flash.js         # 主进程烧录/擦除逻辑
+├── serialport-transport.js   # serialport → esptool-js Transport 适配层
+├── index.html                # 主窗口页面
+├── curve.html                # 曲线窗口页面
+├── firmware.html             # 固件更新窗口页面
+├── styles.css                # 样式文件
+├── start.bat                 # Windows 启动脚本
+└── package.json              # 项目配置
 ```
 
 ## 技术栈
@@ -143,9 +148,29 @@ ESP32C3_USB_METER_Host/
 本项目在开发过程中使用了 AI Coding 辅助工具进行代码编写和调试。
 
 ## 版本信息
+
 - 命名方式：项目名-v版本-系统-架构-类型.zip
 - 当前版本: 1.1.6Beta
 - 编译时间: 每次运行自动获取
+
+## 更新日志
+
+### v1.1.6Beta (2026-07-08)
+
+**修复**
+- 修复主窗口连接芯片后日志显示 MAC 地址即白屏的问题（`processTextData` 全局 `dataBuffer` 污染）
+- 修复固件烧录窗口在 stub 上传阶段白屏卡死 → **Electron 28 WebSerial C++ 级崩溃**
+- 烧录引擎从渲染进程 WebSerial 迁移至**主进程 serialport npm 包**
+- 新增 `serialport-transport.js`：为 esptool-js 提供 Node.js serialport 适配层（SLIP 编解码 / DTR-RTS / 缓冲读取）
+- 新增 `firmware-flash.js`：主进程烧录/擦除逻辑，通过 IPC 向前端推送进度
+- 烧录前自动释放主界面串口，避免 COM 口冲突
+- 修复 SLIP 多包响应数据丢弃问题（芯片一次返回 8 个响应包时仅消费第 1 个）
+- 修复 ESP32-C3 USB-JTAG-Serial 复位序列（`'usb_reset'` 模式）
+- 终端输出增加缓冲机制，避免逐字符 DOM 更新风暴
+
+### v1.1.4Beta
+
+- 初始固件烧录功能（WebSerial 方案，存在 Electron 兼容性问题）
 
 ## 许可证
 

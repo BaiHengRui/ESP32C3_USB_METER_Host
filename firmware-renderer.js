@@ -49,6 +49,7 @@ async function init() {
   setupEventListeners()
   initTheme()
   bindBrowseButtons()
+  updateRemoveButtons()  // 更新初始行的移除按钮状态
   await refreshPorts()
 
   window.electronAPI.onFlashProgress(({ percent, message }) => {
@@ -107,6 +108,17 @@ function setupEventListeners() {
   elements.startBtn.addEventListener('click', startFlashing)
   elements.stopBtn.addEventListener('click', stopFlashing)
   elements.eraseBtn.addEventListener('click', eraseFlash)
+
+  // 事件委托：移除分区行（兼容 HTML 初始行 + 动态添加的行）
+  elements.partitionTableBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.btn-remove')
+    if (!btn) return
+    const row = btn.closest('tr')
+    if (!row) return
+    row.remove()
+    updateRowNumbers()
+    updateRemoveButtons()
+  })
 }
 
 function bindBrowseButtons() {
@@ -156,9 +168,6 @@ function addPartitionRow(address = '0x00000') {
     <td><button class="btn-remove">移除</button></td>`
 
   newRow.querySelector('.btn-browse-fw').addEventListener('click', (e) => { browseFirmware(e.target) })
-  newRow.querySelector('.btn-remove').addEventListener('click', () => {
-    newRow.remove(); updateRowNumbers(); updateRemoveButtons()
-  })
 
   elements.partitionTableBody.appendChild(newRow)
   updateRemoveButtons()
