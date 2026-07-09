@@ -5,14 +5,29 @@ const { SerialPort } = require('serialport')
 
 // 应用信息
 const APP_NAME = 'ESP32C3-METER 上位机'
-const APP_VERSION = '1.2.0Beta'
+const APP_VERSION = '1.2.1'
 
 // 获取编译时间
 function getBuildTime() {
   try {
+    // 优先读取打包时写入的 build-info.json
+    const buildInfoPath = path.join(__dirname, 'build-info.json')
+    if (fs.existsSync(buildInfoPath)) {
+      const buildInfo = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'))
+      const buildDate = new Date(buildInfo.buildTime)
+      // 转换为GMT+8
+      const gmt8Time = new Date(buildDate.getTime() + 8 * 60 * 60 * 1000)
+      const year = gmt8Time.getUTCFullYear()
+      const month = String(gmt8Time.getUTCMonth() + 1).padStart(2, '0')
+      const day = String(gmt8Time.getUTCDate()).padStart(2, '0')
+      const hours = String(gmt8Time.getUTCHours()).padStart(2, '0')
+      const minutes = String(gmt8Time.getUTCMinutes()).padStart(2, '0')
+      const seconds = String(gmt8Time.getUTCSeconds()).padStart(2, '0')
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} (GMT+8)`
+    }
+    // 降级：开发模式下用文件修改时间
     const stats = fs.statSync(__filename)
     const buildDate = new Date(stats.mtime)
-    // 转换为GMT+8
     const gmt8Time = new Date(buildDate.getTime() + 8 * 60 * 60 * 1000)
     const year = gmt8Time.getUTCFullYear()
     const month = String(gmt8Time.getUTCMonth() + 1).padStart(2, '0')
@@ -20,7 +35,7 @@ function getBuildTime() {
     const hours = String(gmt8Time.getUTCHours()).padStart(2, '0')
     const minutes = String(gmt8Time.getUTCMinutes()).padStart(2, '0')
     const seconds = String(gmt8Time.getUTCSeconds()).padStart(2, '0')
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} (GMT+8)`
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} (GMT+8) (DEV)`
   } catch (e) {
     return '未知'
   }

@@ -1,11 +1,12 @@
 {
   "name": "esp32c3_usb_meter_host",
-  "version": "1.2.0beta",
+  "version": "1.2.1",
   "description": "ESP32C3 USB METER Host Application",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:win": "electron-builder --win",
+    "prebuild:win": "node -e \"const fs=require('fs');fs.writeFileSync('build-info.json',JSON.stringify({buildTime:new Date().toISOString()}))\"",
+    "build:win": "npm run prebuild:win && electron-builder --win",
     "postinstall": "patch-package"
   },
   "build": {
@@ -49,6 +50,7 @@
       "firmware.html",
       "styles.css",
       "start.bat",
+      "build-info.json",
       "assets/**",
       "node_modules/**"
     ],
