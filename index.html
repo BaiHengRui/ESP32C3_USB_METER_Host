@@ -73,6 +73,44 @@
         <button id="setSampleRateBtn" class="btn btn-primary">设置采样率</button>
       </div>
 
+      <!-- 阈值设置 -->
+      <div class="form-row threshold-row">
+        <label>阈值:</label>
+        <div class="threshold-group">
+          <span class="threshold-label">起始</span>
+          <div class="number-input number-input-sm">
+            <button id="thrStartVMinus" class="number-btn number-btn-sm">-</button>
+            <input type="number" id="thrStartV" class="threshold-input" placeholder="mV" value="0" min="0">
+            <button id="thrStartVPlus" class="number-btn number-btn-sm">+</button>
+          </div>
+          <span class="threshold-unit">mV</span>
+          <div class="number-input number-input-sm">
+            <button id="thrStartIMinus" class="number-btn number-btn-sm">-</button>
+            <input type="number" id="thrStartI" class="threshold-input" placeholder="mA" value="0" min="0">
+            <button id="thrStartIPlus" class="number-btn number-btn-sm">+</button>
+          </div>
+          <span class="threshold-unit">mA</span>
+          <button id="setStartBtn" class="btn btn-primary btn-sm">设置起始</button>
+        </div>
+        <div class="threshold-group">
+          <span class="threshold-label">结束</span>
+          <div class="number-input number-input-sm">
+            <button id="thrEndVMinus" class="number-btn number-btn-sm">-</button>
+            <input type="number" id="thrEndV" class="threshold-input" placeholder="mV" value="0" min="0">
+            <button id="thrEndVPlus" class="number-btn number-btn-sm">+</button>
+          </div>
+          <span class="threshold-unit">mV</span>
+          <div class="number-input number-input-sm">
+            <button id="thrEndIMinus" class="number-btn number-btn-sm">-</button>
+            <input type="number" id="thrEndI" class="threshold-input" placeholder="mA" value="0" min="0">
+            <button id="thrEndIPlus" class="number-btn number-btn-sm">+</button>
+          </div>
+          <span class="threshold-unit">mA</span>
+          <button id="setEndBtn" class="btn btn-primary btn-sm">设置结束</button>
+        </div>
+        <button id="queryThresholdBtn" class="btn btn-secondary btn-sm">查询阈值</button>
+      </div>
+
       <!-- 常用命令 -->
       <div class="form-row">
         <button id="queryInfoBtn" class="btn btn-secondary">查询信息</button>

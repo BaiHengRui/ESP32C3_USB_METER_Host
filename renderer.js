@@ -26,6 +26,23 @@ const elements = {
   sampleRateSelect: document.getElementById('sampleRateSelect'),
   setSampleRateBtn: document.getElementById('setSampleRateBtn'),
 
+  // 阈值设置
+  thrStartV: document.getElementById('thrStartV'),
+  thrStartVMinus: document.getElementById('thrStartVMinus'),
+  thrStartVPlus: document.getElementById('thrStartVPlus'),
+  thrStartI: document.getElementById('thrStartI'),
+  thrStartIMinus: document.getElementById('thrStartIMinus'),
+  thrStartIPlus: document.getElementById('thrStartIPlus'),
+  setStartBtn: document.getElementById('setStartBtn'),
+  thrEndV: document.getElementById('thrEndV'),
+  thrEndVMinus: document.getElementById('thrEndVMinus'),
+  thrEndVPlus: document.getElementById('thrEndVPlus'),
+  thrEndI: document.getElementById('thrEndI'),
+  thrEndIMinus: document.getElementById('thrEndIMinus'),
+  thrEndIPlus: document.getElementById('thrEndIPlus'),
+  setEndBtn: document.getElementById('setEndBtn'),
+  queryThresholdBtn: document.getElementById('queryThresholdBtn'),
+
   // 常用命令
   queryInfoBtn: document.getElementById('queryInfoBtn'),
   helpBtn: document.getElementById('helpBtn'),
@@ -154,6 +171,17 @@ function setupEventListeners() {
 
   // 采样率
   elements.setSampleRateBtn.addEventListener('click', setSampleRate)
+
+  // 阈值设置
+  elements.setStartBtn.addEventListener('click', setStartThreshold)
+  elements.setEndBtn.addEventListener('click', setEndThreshold)
+  elements.queryThresholdBtn.addEventListener('click', () => sendCommand('threshold'))
+
+  // 阈值 +/- 按钮
+  setupThresholdStepper('thrStartV', 100)
+  setupThresholdStepper('thrStartI', 10)
+  setupThresholdStepper('thrEndV', 100)
+  setupThresholdStepper('thrEndI', 10)
 
   // 常用命令
   elements.queryInfoBtn.addEventListener('click', () => sendCommand('info'))
@@ -292,6 +320,36 @@ async function setRotation() {
 async function setSampleRate() {
   const value = elements.sampleRateSelect.value
   await sendCommand(`sample:${value}`)
+}
+
+// 阈值步进按钮通用绑定(name不含后缀, step步长)
+function setupThresholdStepper(name, step) {
+  const input = elements[name]
+  const minus = elements[name + 'Minus']
+  const plus = elements[name + 'Plus']
+  if (!input || !minus || !plus) return
+  minus.addEventListener('click', () => {
+    const v = Math.max(0, (parseInt(input.value) || 0) - step)
+    input.value = v
+  })
+  plus.addEventListener('click', () => {
+    const v = (parseInt(input.value) || 0) + step
+    input.value = v
+  })
+}
+
+// 设置起始阈值
+async function setStartThreshold() {
+  const v = elements.thrStartV.value || '0'
+  const i = elements.thrStartI.value || '0'
+  await sendCommand(`set_start=${v},${i}`)
+}
+
+// 设置结束阈值
+async function setEndThreshold() {
+  const v = elements.thrEndV.value || '0'
+  const i = elements.thrEndI.value || '0'
+  await sendCommand(`set_end=${v},${i}`)
 }
 
 // 恢复默认设置
