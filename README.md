@@ -143,9 +143,6 @@ ESP32C3_USB_METER_Host/
 - **截图库**: html2canvas
 - **串口通信**: serialport
 
-## AI Coding 辅助说明
-
-本项目在开发过程中使用了 AI Coding 辅助工具进行代码编写和调试。
 
 ## 版本信息
 
@@ -180,6 +177,10 @@ ESP32C3_USB_METER_Host/
 ### v1.1.4Beta
 
 - 初始固件烧录功能（WebSerial 方案，存在 Electron 兼容性问题）
+
+## AI Coding 辅助说明
+
+本项目在开发过程中使用了 AI Coding 辅助工具进行代码编写和调试。
 
 ## 许可证
 
