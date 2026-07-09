@@ -293,8 +293,8 @@ input[type="range"]::-webkit-slider-thumb {
   margin-right: 2px;
 }
 
-input.threshold-input {
-  width: 52px;
+.number-input input.threshold-input {
+  width: 60px;
   padding: 4px 4px;
   font-size: 12px;
   text-align: center;
@@ -302,10 +302,22 @@ input.threshold-input {
   border-left: none;
   border-right: none;
   -moz-appearance: textfield;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: text;
+  height: 26px;
+  line-height: 26px;
 }
 
-input.threshold-input::-webkit-inner-spin-button,
-input.threshold-input::-webkit-outer-spin-button {
+.number-input input.threshold-input:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  background: var(--bg-primary);
+  box-shadow: 0 0 4px rgba(0, 217, 255, 0.3);
+}
+
+.number-input input.threshold-input::-webkit-inner-spin-button,
+.number-input input.threshold-input::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }

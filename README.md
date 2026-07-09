@@ -38,65 +38,31 @@ npm start
 
 ## 编译打包
 
-### 环境要求
-
-- electron-builder (开发依赖)
-
-### 安装打包工具
+### 构建命令
 
 ```bash
-npm install --save-dev electron-builder
-```
-
-### Windows 平台
-
-```bash
-# 打包为 Windows 可执行文件
+# 打包为 Windows 绿色便携版（同时输出单EXE + 免安装zip）
 npm run build:win
 ```
 
-### macOS 平台
+### 构建产物
 
-```bash
-# 打包为 macOS 应用
-npm run build:mac
-```
+打包完成后，产物将生成在 `release/` 目录下：
 
-### Linux 平台
+| 产物 | 说明 |
+|------|------|
+| `ESP32C3-METER-vX.X.X-portable.exe` | 单文件便携版，无需安装，双击即用 |
+| `ESP32C3-METER-vX.X.X-win-x64.zip` | 免安装绿色版，解压后运行 `ESP32C3-METER.exe` |
+| `win-unpacked/` | 解压后的绿色版目录 |
 
-```bash
-# 打包为 Linux 应用
-npm run build:linux
-```
+### 构建配置说明
 
-### 打包配置文件
+`package.json` 中 `build` 字段关键配置：
 
-在 `package.json` 中添加：
-
-```json
-{
-  "scripts": {
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
-  },
-  "build": {
-    "appId": "com.esp32c3.meter",
-    "productName": "ESP32C3-METER",
-    "win": {
-      "target": "nsis"
-    },
-    "mac": {
-      "target": "dmg"
-    },
-    "linux": {
-      "target": "AppImage"
-    }
-  }
-}
-```
-
-打包完成后，可执行文件将生成在 `dist` 目录下。
+- **`win.target`**: `portable`（单EXE） + `dir`（绿色目录），构建后自动压缩为 zip
+- **`compression: "maximum"`**: 最高压缩级别，减小产物体积
+- **`asar: true`**: 应用代码打包为 asar 归档
+- **`win.icon`**: 应用图标（`build/icon.png`，需 ≥256×256）
 
 ## 使用说明
 
@@ -132,8 +98,10 @@ ESP32C3_USB_METER_Host/
 ├── curve.html                # 曲线窗口页面
 ├── firmware.html             # 固件更新窗口页面
 ├── styles.css                # 样式文件
-├── start.bat                 # Windows 启动脚本
-└── package.json              # 项目配置
+├── package.json              # 项目配置
+├── build/                    # 构建资源（图标等）
+│   └── icon.png              # 应用图标（256×256）
+└── patches/                  # npm 补丁
 ```
 
 ## 技术栈
@@ -146,11 +114,17 @@ ESP32C3_USB_METER_Host/
 
 ## 版本信息
 
-- 命名方式：项目名-v版本-系统-架构-类型.zip
+- 命名方式：`ESP32C3-METER-v版本-portable.exe`（单EXE）/ `ESP32C3-METER-v版本-win-x64.zip`（免安装包）
 
 ## 更新日志
 
 ### v1.2.1 (2026-07-09)
+
+**构建优化**
+- 构建目标改为绿色便携版：同时输出单文件 EXE (`portable`) + 免安装 zip (`dir`)
+- 移除未使用依赖 (`all`、`chartjs-plugin-crosshair`)，优化产物体积
+- 修复阈值输入框 CSS 特异性冲突导致无法手动输入的问题
+- 应用图标更换为 `USB_Host.ico`
 
 **修复**
 - 修复「编译时间」显示为文件解压/打开时间而非真实构建时间的问题；改为打包时写入 `build-info.json`，运行时读取

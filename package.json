@@ -6,17 +6,27 @@
   "scripts": {
     "start": "electron .",
     "prebuild:win": "node -e \"const fs=require('fs');fs.writeFileSync('build-info.json',JSON.stringify({buildTime:new Date().toISOString()}))\"",
-    "build:win": "npm run prebuild:win && electron-builder --win",
+    "build:win": "npm run prebuild:win && electron-builder --win && npm run zip:dir",
+    "zip:dir": "node -e \"const{execSync}=require('child_process');const p=require('./package.json');const d=p.build.directories.output;execSync('powershell -Command Compress-Archive -Path '+d+'/win-unpacked/* -DestinationPath '+d+'/'+p.build.productName+'-v'+p.version+'-win-x64.zip -CompressionLevel Optimal -Force',{stdio:'inherit'})\"",
     "postinstall": "patch-package"
   },
   "build": {
     "appId": "com.esp32c3.meter",
     "productName": "ESP32C3-METER",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
+    "compression": "maximum",
+    "asar": true,
     "win": {
+      "icon": "build/icon.png",
       "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
         {
           "target": "dir",
           "arch": [
@@ -25,18 +35,16 @@
         }
       ]
     },
+    "portable": {
+      "artifactName": "${productName}-v${version}-portable.exe"
+    },
     "asarUnpack": [
-      "node_modules/esptool-js/**"
+      "node_modules/esptool-js/**",
+      "node_modules/@serialport/**",
+      "node_modules/serialport/**"
     ],
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
     },
     "files": [
       "main.js",
@@ -49,10 +57,21 @@
       "curve.html",
       "firmware.html",
       "styles.css",
-      "start.bat",
       "build-info.json",
-      "assets/**",
-      "node_modules/**"
+      "node_modules/html2canvas/dist/html2canvas.min.js",
+      "node_modules/chart.js/dist/chart.umd.js",
+      "node_modules/chartjs-plugin-zoom/dist/chartjs-plugin-zoom.min.js",
+      "node_modules/@serialport/**",
+      "node_modules/serialport/**",
+      "node_modules/esptool-js/**",
+      "node_modules/debug/src/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": "build",
+        "filter": ["**/*"]
+      }
     ],
     "extraMetadata": {
       "main": "main.js"
@@ -72,9 +91,7 @@
     "patch-package": "^8.0.1"
   },
   "dependencies": {
-    "all": "^0.0.0",
     "chart.js": "^4.5.1",
-    "chartjs-plugin-crosshair": "^2.0.0",
     "chartjs-plugin-zoom": "^2.2.0",
     "esptool-js": "^0.6.0",
     "html2canvas": "^1.4.1",
