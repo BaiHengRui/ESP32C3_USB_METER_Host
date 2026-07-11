@@ -109,15 +109,30 @@ async function flashFirmware(params, onProgress, onLog) {
       }
     })
 
-    // 复位设备（使用 USB-JTAG-Serial 专用复位序列）
+    // 复位设备（ESP_FLASH_END + reboot 标志，所有 stub 均支持）
     onLog('正在复位设备...')
     onProgress(97, '正在复位设备...')
     try {
-      const usbReset = new UsbJtagSerialReset(transport)
-      await usbReset.reset()
-      onLog('设备已复位')
+      // 方法1：通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启到用户程序
+      //   writeFlash 内部已调用 flashFinish(false) 退出烧录模式，此处再调用 flashFinish(true) 触发软重启
+      onLog('发送重启命令 (ESP_FLASH_END)...')
+      await esploader.flashFinish(true, 5000)
+      onLog('设备已复位（软件复位）')
     } catch (e) {
-      onLog(`复位失败: ${e.message}，请手动复位设备`)
+      // 如果芯片已重启，可能收不到响应，超时属正常
+      if (e.message && (e.message.includes('timeout') || e.message.includes('serial') || e.message.includes('no data'))) {
+        onLog('设备已复位（芯片重启中...）')
+      } else {
+        onLog(`软件复位失败: ${e.message}`)
+        // 方法2：降级使用 RTS 硬复位（适用于外部 USB-UART 如 CP2102 连接 EN 引脚）
+        try {
+          onLog('尝试 RTS 硬复位...')
+          await esploader.after('hard_reset', true)
+          onLog('设备已复位（RTS 硬复位）')
+        } catch (e2) {
+          onLog(`RTS 硬复位失败: ${e2.message}，请手动复位设备（按 EN 键或重新插拔 USB）`)
+        }
+      }
     }
 
     onProgress(100, '✅ 烧录完成！')
@@ -182,11 +197,23 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
     onLog('正在复位设备...')
     onProgress(90, '正在复位设备...')
     try {
-      const usbReset = new UsbJtagSerialReset(transport)
-      await usbReset.reset()
-      onLog('设备已复位')
+      // 通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启
+      onLog('发送重启命令 (ESP_FLASH_END)...')
+      await esploader.flashFinish(true, 5000)
+      onLog('设备已复位（软件复位）')
     } catch (e) {
-      onLog(`复位失败: ${e.message}，请手动复位设备`)
+      if (e.message && (e.message.includes('timeout') || e.message.includes('serial') || e.message.includes('no data'))) {
+        onLog('设备已复位（芯片重启中...）')
+      } else {
+        onLog(`软件复位失败: ${e.message}`)
+        try {
+          onLog('尝试 RTS 硬复位...')
+          await esploader.after('hard_reset', true)
+          onLog('设备已复位（RTS 硬复位）')
+        } catch (e2) {
+          onLog(`RTS 硬复位失败: ${e2.message}，请手动复位设备（按 EN 键或重新插拔 USB）`)
+        }
+      }
     }
 
     onProgress(100, '✅ 擦除完成！')
