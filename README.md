@@ -99,6 +99,7 @@ ESP32C3_USB_METER_Host/
 ├── firmware.html             # 固件更新窗口页面
 ├── styles.css                # 样式文件
 ├── package.json              # 项目配置
+├── version-info.json         # 版本说明/更新日志
 ├── build/                    # 构建资源（图标等）
 │   └── icon.png              # 应用图标（256×256）
 └── patches/                  # npm 补丁
@@ -117,6 +118,24 @@ ESP32C3_USB_METER_Host/
 - 命名方式：`ESP32C3-METER-v版本-portable.exe`（单EXE）/ `ESP32C3-METER-v版本-win-x64.zip`（免安装包）
 
 ## 更新日志
+
+### v2.0.0 (2026-07-25)
+
+**数据结构同步**
+- 下位机结构体更新：移除 `sw_version`/`hw_version`，新增 `temperature_cpu`，`time_ms` → `esp_time_us`（微秒），数据包 64→44 字节
+- 上位机解析 `main.js` 同步适配：新增 `temperatureCpu` 解析，`temperature` → `temperatureAdc`
+
+**曲线窗口增强**
+- 新增 CPU 温度显示（HEX 原始数据面板）
+- 存储深度改为内存预算模式：5~200 MB 可选，右侧动态显示预计录制时长
+- 时长格式自适应：<1天显示"X小时X分钟"，≥1天显示"X天X小时"
+- 修复 Chart.js Canvas 中文字体渲染（`Chart.defaults.font.family` 配置微软雅黑/苹方）
+- Tooltip 标题添加"时间（s）"前缀
+
+**工程优化**
+- 版本号从 `package.json` 动态读取，无需同步修改 `main.js`
+- 新增 `version-info.json` 可编辑版本说明文件，显示在"关于"对话框
+- 新增项目 README 更新日志
 
 ### v1.2.1 (2026-07-09)
 
