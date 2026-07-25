@@ -464,10 +464,9 @@ function createDriverWindow() {
 
 // 获取驱动文件所在目录（处理 asar 打包路径）
 function getDriverDir() {
-  const appPath = app.getAppPath()
-  // 打包后 asar 中，解包文件在 app.asar.unpacked/
-  if (appPath.endsWith('.asar')) {
-    return path.join(appPath + '.unpacked', 'drives', 'esp32-jtag-usb-drives')
+  // extraResources 在打包后位于 resources/drives/，开发模式在项目根目录
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'drives', 'esp32-jtag-usb-drives')
   }
   return path.join(__dirname, 'drives', 'esp32-jtag-usb-drives')
 }

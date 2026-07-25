@@ -80,23 +80,31 @@ npm run build:win
 
 ```
 ESP32C3_USB_METER_Host/
-├── main.js                   # 主进程入口（串口通信 + 固件烧录 IPC）
+├── main.js                   # 主进程入口（串口通信 + 固件烧录 + 驱动安装 IPC）
 ├── preload.js                # 预加载脚本（IPC 桥接）
 ├── renderer.js               # 主窗口渲染进程
-├── firmware-renderer.js      # 固件窗口渲染进程（IPC 方案）
+├── firmware-renderer.js      # 固件窗口渲染进程
 ├── firmware-flash.js         # 主进程烧录/擦除逻辑
 ├── serialport-transport.js   # serialport → esptool-js Transport 适配层
 ├── index.html                # 主窗口页面
 ├── curve.html                # 曲线窗口页面
 ├── firmware.html             # 固件更新窗口页面
+├── driver.html               # 驱动安装窗口页面
 ├── styles.css                # 样式文件
+├── start.bat                 # 开发启动脚本
 ├── package.json              # 项目配置
 ├── USER_MANUAL.md            # 用户使用说明书
 ├── version-info.json         # 版本说明/更新日志
 ├── build/                    # 构建资源（图标等）
-│   └── icon.png              # 应用图标（256×256）
+│   ├── icon.png              # 主窗口图标
+│   ├── curve.png             # 曲线窗口图标
+│   ├── update.png            # 固件更新窗口图标
+│   └── drive.png             # 驱动安装窗口图标
+├── drives/                   # ESP32-C3 USB JTAG 驱动文件
+│   └── esp32-jtag-usb-drives/
 ├── imgs/                     # 说明书截图资源
-└── patches/                  # npm 补丁
+├── patches/                  # npm 补丁
+└── release/                  # 构建产物（单EXE + 免安装zip）
 ```
 
 ## 技术栈

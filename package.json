@@ -42,8 +42,7 @@
     "asarUnpack": [
       "node_modules/esptool-js/**",
       "node_modules/@serialport/**",
-      "node_modules/serialport/**",
-      "drives/**"
+      "node_modules/serialport/**"
     ],
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
@@ -61,6 +60,7 @@
       "driver.html",
       "styles.css",
       "build-info.json",
+      "version-info.json",
       "node_modules/html2canvas/dist/html2canvas.min.js",
       "node_modules/chart.js/dist/chart.umd.js",
       "node_modules/chartjs-plugin-zoom/dist/chartjs-plugin-zoom.min.js",
@@ -73,6 +73,11 @@
       {
         "from": "build",
         "to": "build",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "drives",
+        "to": "drives",
         "filter": ["**/*"]
       }
     ],
