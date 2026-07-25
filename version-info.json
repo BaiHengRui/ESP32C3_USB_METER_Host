@@ -1,0 +1,4 @@
+{
+  "releaseNotes": "ESP32C3 USB 功率计上位机",
+  "changelog": "v2.0.0:\n- 更新下位机数据结构同步\n- 新增 CPU 温度显示\n- 存储深度改为内存预算模式\n- 版本号自动同步 package.json"
+}

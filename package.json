@@ -1,7 +1,7 @@
 {
-  "name": "esp32c3_usb_meter_host",
-  "version": "1.2.1",
-  "description": "ESP32C3 USB METER Host Application",
+  "name": "esp32_usb_meter_host",
+  "version": "2.0.0",
+  "description": "ESP32 USB METER Host Application",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -11,8 +11,8 @@
     "postinstall": "patch-package"
   },
   "build": {
-    "appId": "com.esp32c3.meter",
-    "productName": "ESP32C3-METER",
+    "appId": "com.esp32usb.meter",
+    "productName": "ESP32-USB-METER",
     "directories": {
       "output": "release"
     },
@@ -20,6 +20,7 @@
     "asar": true,
     "win": {
       "icon": "build/icon.png",
+      "executableName": "ESP32USB_Meter_Host",
       "target": [
         {
           "target": "portable",
@@ -79,7 +80,7 @@
   },
   "keywords": [
     "electron",
-    "esp32c3",
+    "esp32",
     "usb",
     "meter"
   ],

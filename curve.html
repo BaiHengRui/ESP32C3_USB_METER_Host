@@ -185,6 +185,16 @@
             <option value="500" selected>500ms</option>
             <option value="1000">1000ms</option>
           </select>
+          <label style="margin-left:12px;">存储深度:</label>
+          <select id="depthSelect">
+            <option value="5">5 MB</option>
+            <option value="10">10 MB</option>
+            <option value="20" selected>20 MB</option>
+            <option value="50">50 MB</option>
+            <option value="100">100 MB</option>
+            <option value="200">200 MB</option>
+          </select>
+          <span id="depthHint" style="font-size:11px;color:var(--text-secondary);margin-left:4px;"></span>
           <button id="toggleStreamBtn" class="btn btn-success">开始采集</button>
           <button id="clearDataBtn" class="btn btn-warning">清空数据</button>
           <button id="resetViewBtn" class="btn btn-info">重置视图</button>
@@ -256,8 +266,12 @@
           <span class="value text-orange" id="powerLabel">0.0000 W</span>
         </div>
         <div class="data-row">
-          <span class="label">温度:</span>
+          <span class="label">ADC温度:</span>
           <span class="value text-purple" id="tempLabel">0.00 °C</span>
+        </div>
+        <div class="data-row">
+          <span class="label">CPU温度:</span>
+          <span class="value text-secondary" id="cpuTempLabel">0.00 °C</span>
         </div>
       </div>
 
@@ -298,24 +312,30 @@
       <!-- 原始数据 HEX -->
       <div class="panel-section">
         <h3>原始数据</h3>
-        <div class="hex-display" id="hexDisplay">等待开始采集...</div>
+        <div class="hex-display" id="hexDisplay">NULL</div>
       </div>
     </div>
   </div>
 
   <script>
     // 曲线窗口逻辑
-    const MAX_POINTS = 500
+
+    // 设置 Chart.js 全局中文字体，否则 Canvas 渲染中文会显示为方块或空白
+    Chart.defaults.font.family = "'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif"
+
+    const POINTS_PER_MB = Math.floor(1024 * 1024 / 72)  // ≈14563 点/MB（每点约72字节）
+    let MAX_POINTS = 20 * POINTS_PER_MB                    // 默认 20 MB
 
     // 数据存储（L1：全局原始数据池，唯一真值）
     const dataStore = {
       timeData: [],
       systemTimeData: [],
-      timeMsData: [],
+      espTimeUsData: [],
       voltageData: [],
       currentData: [],
       powerData: [],
       temperatureData: [],
+      temperatureCpuData: [],
       energyMWhData: [],
       chargeMAhData: []
     }
@@ -389,7 +409,7 @@
     let streamInterval = null
     let autoFollow = true       // 录制时是否自动跟随最新数据（用户缩放/平移/框选后自动关闭）
     let userInteracted = false  // 用户是否手动操作过视图
-    let recordingStartMs = null // 录制起始时间戳（ms），用于计算相对时间，保证X轴始终从0开始
+    let recordingStartUs = null // 录制起始时间戳（us），用于计算相对时间，保证X轴始终从0开始
     let followWindowSize = 10   // 自动跟随时的窗口宽度（秒），滚轮缩放/框选时同步更新
 
     // 缩放常量
@@ -412,6 +432,8 @@
     // DOM 元素
     const elements = {
       intervalSelect: document.getElementById('intervalSelect'),
+      depthSelect: document.getElementById('depthSelect'),
+      depthHint: document.getElementById('depthHint'),
       toggleStreamBtn: document.getElementById('toggleStreamBtn'),
       clearDataBtn: document.getElementById('clearDataBtn'),
       resetViewBtn: document.getElementById('resetViewBtn'),
@@ -428,6 +450,7 @@
       currentLabel: document.getElementById('currentLabel'),
       powerLabel: document.getElementById('powerLabel'),
       tempLabel: document.getElementById('tempLabel'),
+      cpuTempLabel: document.getElementById('cpuTempLabel'),
       whLabel: document.getElementById('whLabel'),
       ahLabel: document.getElementById('ahLabel'),
       mwhLabel: document.getElementById('mwhLabel'),
@@ -1287,7 +1310,12 @@
             titleColor: '#00d9ff',
             bodyColor: '#eaeaea',
             borderColor: '#0066CC',
-            borderWidth: 1
+            borderWidth: 1,
+            callbacks: {
+              title: function(context) {
+                return 'Time(s):' + context[0].parsed.x.toFixed(3)
+              }
+            }
           },
           zoom: {
             limits: {
@@ -1581,20 +1609,21 @@
     // 更新图表数据
     function updateCharts(data) {
       // 以首个采样点为时间零点，保证X轴始终从0开始从左到右
-      if (recordingStartMs === null) {
-        recordingStartMs = data.timeMs
+      if (recordingStartUs === null) {
+        recordingStartUs = data.espTimeUs
       }
-      const timeSeconds = (data.timeMs - recordingStartMs) / 1000.0
+      const timeSeconds = (data.espTimeUs - recordingStartUs) / 1000000.0
 
       // 添加数据
       const systemTimeSeconds = Date.now() / 1000
       dataStore.timeData.push(timeSeconds)
       dataStore.systemTimeData.push(systemTimeSeconds)
-      dataStore.timeMsData.push(data.timeMs)
+      dataStore.espTimeUsData.push(data.espTimeUs)
       dataStore.voltageData.push(data.voltage)
       dataStore.currentData.push(data.current)
       dataStore.powerData.push(data.power)
-      dataStore.temperatureData.push(data.temperature)
+      dataStore.temperatureData.push(data.temperatureAdc)
+      dataStore.temperatureCpuData.push(data.temperatureCpu)
       dataStore.energyMWhData.push(data.energyMWh)
       dataStore.chargeMAhData.push(data.chargeMAh)
 
@@ -1602,11 +1631,12 @@
       if (dataStore.timeData.length > MAX_POINTS) {
         dataStore.timeData.shift()
         dataStore.systemTimeData.shift()
-        dataStore.timeMsData.shift()
+        dataStore.espTimeUsData.shift()
         dataStore.voltageData.shift()
         dataStore.currentData.shift()
         dataStore.powerData.shift()
         dataStore.temperatureData.shift()
+        dataStore.temperatureCpuData.shift()
         dataStore.energyMWhData.shift()
         dataStore.chargeMAhData.shift()
       }
@@ -1622,7 +1652,8 @@
       elements.voltageLabel.textContent = data.voltage.toFixed(4) + ' V'
       elements.currentLabel.textContent = data.current.toFixed(4) + ' A'
       elements.powerLabel.textContent = data.power.toFixed(4) + ' W'
-      elements.tempLabel.textContent = data.temperature.toFixed(2) + ' °C'
+      elements.tempLabel.textContent = data.temperatureAdc.toFixed(2) + ' °C'
+      elements.cpuTempLabel.textContent = data.temperatureCpu.toFixed(2) + ' °C'
       elements.whLabel.textContent = (data.energyMWh / 1000).toFixed(4) + ' Wh'
       elements.ahLabel.textContent = (data.chargeMAh / 1000).toFixed(4) + ' Ah'
       elements.mwhLabel.textContent = data.energyMWh.toFixed(4) + ' mWh'
@@ -1633,11 +1664,12 @@
 
     // 更新 HEX 显示
     function updateHexDisplay(data) {
-      let hexStr = `时间: ${data.timeMs} ms\n`
+      let hexStr = `时间: ${data.espTimeUs} us\n`
+      hexStr += `CPU温度: ${data.temperatureCpu.toFixed(2)} °C\n`
+      hexStr += `ADC温度: ${data.temperatureAdc.toFixed(2)} °C\n`
       hexStr += `电压: ${data.voltage.toFixed(4)} V\n`
       hexStr += `电流: ${data.current.toFixed(4)} A\n`
       hexStr += `功率: ${data.power.toFixed(4)} W\n`
-      hexStr += `温度: ${data.temperature.toFixed(2)} °C\n`
       hexStr += `mWh: ${data.energyMWh.toFixed(4)}\n`
       hexStr += `mAh: ${data.chargeMAh.toFixed(4)}`
       elements.hexDisplay.textContent = hexStr
@@ -1666,7 +1698,7 @@
       }
 
       resetYAxisExpandedRange()
-      recordingStartMs = null
+      recordingStartUs = null
       followWindowSize = 10
       isStreaming = true
       elements.toggleStreamBtn.textContent = '停止采集'
@@ -1696,6 +1728,35 @@
       elements.statusLabel.textContent = '状态: 已停止'
     }
 
+    // 更新存储深度预计时长提示
+    function updateDepthHint() {
+      const mb = parseInt(elements.depthSelect.value)
+      const points = mb * POINTS_PER_MB
+      const intervalMs = parseInt(elements.intervalSelect.value)
+      const totalSeconds = (points * intervalMs) / 1000
+      let hint
+      if (totalSeconds < 60) {
+        hint = `约${totalSeconds.toFixed(0)}秒`
+      } else if (totalSeconds < 3600) {
+        hint = `约${Math.floor(totalSeconds / 60)}分${Math.floor(totalSeconds % 60)}秒`
+      } else if (totalSeconds < 86400) {
+        hint = `约${Math.floor(totalSeconds / 3600)}小时${Math.floor((totalSeconds % 3600) / 60)}分钟`
+      } else {
+        const days = Math.floor(totalSeconds / 86400)
+        const hours = Math.floor((totalSeconds % 86400) / 3600)
+        hint = `约${days}天${hours}小时`
+      }
+      elements.depthHint.textContent = hint
+    }
+
+    // 按当前存储深度裁剪数据（切换深度时从头部丢弃多余数据）
+    function trimDataToLimit() {
+      const keys = Object.keys(dataStore)
+      while (dataStore.timeData.length > MAX_POINTS) {
+        keys.forEach(k => dataStore[k].shift())
+      }
+    }
+
     // 清空数据
     function clearData() {
       Object.keys(dataStore).forEach(key => {
@@ -1707,7 +1768,7 @@
 
       autoFollow = true
       userInteracted = false
-      recordingStartMs = null
+      recordingStartUs = null
       followWindowSize = 10
       mainChart.data.labels = []
       mainChart.data.datasets.forEach(ds => ds.data = [])
@@ -1754,10 +1815,10 @@
       ])
 
       if (result.filePath) {
-        let csv = '序号,时间(秒),时间戳(ms),电压(V),电流(A),功率(W),温度(°C),能量(mWh),容量(mAh)\n'
+        let csv = '序号,时间(秒),时间戳(us),电压(V),电流(A),功率(W),温度(°C),能量(mWh),容量(mAh)\n'
 
         for (let i = 0; i < dataStore.timeData.length; i++) {
-          csv += `${i + 1},${dataStore.timeData[i].toFixed(3)},${dataStore.timeMsData[i]},`
+          csv += `${i + 1},${dataStore.timeData[i].toFixed(3)},${dataStore.espTimeUsData[i]},`
           csv += `${dataStore.voltageData[i].toFixed(4)},${dataStore.currentData[i].toFixed(4)},${dataStore.powerData[i].toFixed(4)},`
           csv += `${dataStore.temperatureData[i].toFixed(2)},${dataStore.energyMWhData[i].toFixed(4)},${dataStore.chargeMAhData[i].toFixed(4)}\n`
         }
@@ -1813,6 +1874,19 @@
 
       mainChart.update('none')
     }
+
+    // 存储深度切换
+    elements.depthSelect.addEventListener('change', () => {
+      MAX_POINTS = parseInt(elements.depthSelect.value) * POINTS_PER_MB
+      updateDepthHint()
+      trimDataToLimit()
+      rebuildChartData()
+    })
+
+    // 采样间隔切换时更新预计时长
+    elements.intervalSelect.addEventListener('change', () => {
+      updateDepthHint()
+    })
 
     // 设置事件监听
     elements.toggleStreamBtn.addEventListener('click', toggleStream)
@@ -1883,6 +1957,7 @@
     // 启动时初始化主题
     initTheme()
     updateAutoFollowButton()
+    updateDepthHint()
   </script>
 </body>
 </html>

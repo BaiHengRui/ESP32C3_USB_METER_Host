@@ -3,9 +3,12 @@ const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
 
+// 设置应用名称（影响任务管理器中主进程和子进程的显示名称）
+app.setName('meter host')
+
 // 应用信息
-const APP_NAME = 'ESP32C3-METER 上位机'
-const APP_VERSION = '1.2.1'
+const APP_NAME = 'ESP32-USB-METER 上位机'
+const APP_VERSION = require('./package.json').version
 
 // 获取编译时间
 function getBuildTime() {
@@ -43,7 +46,18 @@ function getBuildTime() {
 const BUILD_TIME = getBuildTime()
 
 // USB_CDC_Data 结构体大小
-const USB_CDC_DATA_SIZE = 64
+const USB_CDC_DATA_SIZE = 44
+
+// 读取版本信息文件
+function getVersionInfo() {
+  try {
+    const infoPath = path.join(__dirname, 'version-info.json')
+    if (fs.existsSync(infoPath)) {
+      return JSON.parse(fs.readFileSync(infoPath, 'utf8'))
+    }
+  } catch (e) { /* 忽略 */ }
+  return { releaseNotes: '', changelog: '' }
+}
 
 // 配置文件路径
 const CONFIG_FILE = path.join(app.getPath('userData'), 'config.json')
@@ -86,7 +100,7 @@ function parseUSBCDCData(data) {
       return null
     }
 
-    // 校验和验证
+    // 校验和验证（XOR 所有字节，不含 checksum 自身）
     let checksum = 0
     for (let i = 0; i < USB_CDC_DATA_SIZE - 1; i++) {
       checksum ^= data[i]
@@ -116,13 +130,13 @@ function parseUSBCDCData(data) {
     const snid = data.readUInt32LE(offset)
     offset += 4
 
-    // sw_version (12 bytes, string)
-    const swVersion = data.slice(offset, offset + 12).toString('utf8').replace(/\0/g, '')
-    offset += 12
+    // temperature_cpu (4 bytes, float little-endian) — ESP32 芯片温度
+    const temperatureCpu = data.readFloatLE(offset)
+    offset += 4
 
-    // hw_version (12 bytes, string)
-    const hwVersion = data.slice(offset, offset + 12).toString('utf8').replace(/\0/g, '')
-    offset += 12
+    // temperature_adc (4 bytes, float little-endian) — INA228 温度传感器
+    const temperatureAdc = data.readFloatLE(offset)
+    offset += 4
 
     // voltage (4 bytes, float little-endian)
     const voltage = data.readFloatLE(offset)
@@ -144,12 +158,8 @@ function parseUSBCDCData(data) {
     const chargeMAh = data.readFloatLE(offset)
     offset += 4
 
-    // temperature (4 bytes, float little-endian)
-    const temperature = data.readFloatLE(offset)
-    offset += 4
-
-    // time_ms (8 bytes, uint64_t little-endian)
-    const timeMs = Number(data.readBigUInt64LE(offset))
+    // esp_time_us (8 bytes, uint64_t little-endian) — esp_timer_get_time() 微秒
+    const espTimeUs = Number(data.readBigUInt64LE(offset))
     offset += 8
 
     // current_direction (1 byte, bool)
@@ -165,8 +175,8 @@ function parseUSBCDCData(data) {
       console.log('电流超范围:', current)
       return null
     }
-    if (temperature < -40 || temperature > 150) { // 芯片温度传感器
-      console.log('温度超 INA228 范围:', temperature)
+    if (temperatureAdc < -40 || temperatureAdc > 150) { // 芯片温度传感器
+      console.log('温度超 INA228 范围:', temperatureAdc)
       return null
     }
 
@@ -177,17 +187,14 @@ function parseUSBCDCData(data) {
     return {
       header,
       snid,
-      swVersion,
-      hwVersion,
+      temperatureCpu,
+      temperatureAdc,
       voltage,
       current,
       power,
       energyMWh,
       chargeMAh,
-      energyWh: 0.0,
-      chargeAh: 0.0,
-      temperature,
-      timeMs,
+      espTimeUs,
       currentDirection
     }
   } catch (err) {
@@ -1068,11 +1075,12 @@ function createMenu() {
         {
           label: '关于',
           click: () => {
+            const info = getVersionInfo()
             dialog.showMessageBox(mainWindow, {
               type: 'info',
               title: '关于',
               message: `${APP_NAME}`,
-              detail: `版本: ${APP_VERSION}\n编译时间: ${BUILD_TIME}\n\nESP32C3 USB 电表上位机\n用于与 ESP32C3 设备通信并实时显示数据。`
+              detail: `版本: ${APP_VERSION}\n编译时间: ${BUILD_TIME}\n\n${info.releaseNotes}\n\n更新日志:\n${info.changelog}`
             })
           }
         }
