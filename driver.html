@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>驱动安装</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .driver-container {
+      padding: 20px;
+      max-width: 550px;
+      margin: 0 auto;
+    }
+    .driver-section {
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 15px;
+      border: 1px solid var(--border-color);
+    }
+    .driver-section h3 {
+      margin: 0 0 12px 0;
+      color: var(--text-primary);
+      font-size: 18px;
+    }
+    .driver-section p {
+      margin: 0 0 16px 0;
+      color: var(--text-secondary);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .driver-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .driver-btn {
+      padding: 10px 24px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    .driver-btn:hover { opacity: 0.85; }
+    .driver-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-install {
+      background: #1890ff;
+      color: #fff;
+    }
+    .btn-uninstall {
+      background: #ff4d4f;
+      color: #fff;
+    }
+    .driver-log {
+      background: var(--bg-primary);
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 16px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      word-break: break-all;
+      border: 1px solid var(--border-color);
+      min-height: 40px;
+    }
+    .driver-log:empty::before {
+      content: '等待操作...';
+      color: var(--text-secondary);
+    }
+    .log-success { color: #52c41a; }
+    .log-error { color: #ff4d4f; }
+    .driver-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      border: 1px solid;
+    }
+    .theme-light .driver-note {
+      background: #fff7e6;
+      border-color: #ffd591;
+      color: #ad6800;
+    }
+    .theme-dark .driver-note {
+      background: #2b2111;
+      border-color: #5c3d00;
+      color: #e6a817;
+    }
+    .note-icon { font-size: 16px; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="driver-container">
+    <div class="driver-section">
+      <h3>ESP32 USB JTAG 驱动</h3>
+      <p>安装 USB JTAG/Serial 调试单元驱动程序。</p>
+      <div class="driver-actions">
+        <button id="installBtn" class="driver-btn btn-install">安装驱动</button>
+        <button id="uninstallBtn" class="driver-btn btn-uninstall">卸载驱动</button>
+      </div>
+    </div>
+
+    <div class="driver-note">
+      <span class="note-icon">⚠️</span>
+      <span>驱动安装/卸载需要管理员权限。如果操作失败，请尝试以管理员身份运行本程序。</span>
+    </div>
+
+    <div class="driver-section">
+      <div id="driverLog" class="driver-log"></div>
+    </div>
+  </div>
+
+  <script>
+    const installBtn = document.getElementById('installBtn')
+    const uninstallBtn = document.getElementById('uninstallBtn')
+    const driverLog = document.getElementById('driverLog')
+
+    function logMessage(text, isError = false) {
+      const line = document.createElement('div')
+      line.className = isError ? 'log-error' : 'log-success'
+      line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`
+      driverLog.appendChild(line)
+      driverLog.scrollTop = driverLog.scrollHeight
+    }
+
+    function setButtonsDisabled(disabled) {
+      installBtn.disabled = disabled
+      uninstallBtn.disabled = disabled
+    }
+
+    installBtn.addEventListener('click', async () => {
+      if (!confirm('确定要安装 ESP32 USB JTAG 驱动吗？')) return
+      setButtonsDisabled(true)
+      driverLog.innerHTML = ''
+      logMessage('正在安装驱动，请稍候...')
+      try {
+        const result = await window.electronAPI.installDriver()
+        if (result.success) {
+          logMessage('驱动安装成功！')
+          logMessage(result.message)
+        } else {
+          logMessage('驱动安装失败', true)
+          logMessage(result.message, true)
+        }
+      } catch (err) {
+        logMessage('操作异常: ' + err.message, true)
+      }
+      setButtonsDisabled(false)
+    })
+
+    uninstallBtn.addEventListener('click', async () => {
+      if (!confirm('确定要卸载 ESP32-C3 USB JTAG 驱动吗？')) return
+      setButtonsDisabled(true)
+      driverLog.innerHTML = ''
+      logMessage('正在卸载驱动，请稍候...')
+      try {
+        const result = await window.electronAPI.uninstallDriver()
+        if (result.success) {
+          logMessage('驱动卸载成功！')
+          logMessage(result.message)
+        } else {
+          logMessage('ERR驱动卸载失败', true)
+          logMessage(result.message, true)
+        }
+      } catch (err) {
+        logMessage('ERR操作异常: ' + err.message, true)
+      }
+      setButtonsDisabled(false)
+    })
+
+    // 主题监听
+    function applyTheme(theme) {
+      document.body.classList.remove('theme-light', 'theme-dark')
+      document.body.classList.add(`theme-${theme}`)
+    }
+    // 初始主题
+    window.electronAPI.getTheme().then(applyTheme)
+    window.electronAPI.onThemeChanged(applyTheme)
+  </script>
+</body>
+</html>

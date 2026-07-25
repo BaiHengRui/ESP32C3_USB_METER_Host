@@ -117,6 +117,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, data) => callback(data)
     ipcRenderer.on('flash-log', listener)
     return () => ipcRenderer.removeListener('flash-log', listener)
-  }
+  },
+
+  // 驱动安装
+  installDriver: () => ipcRenderer.invoke('install-driver'),
+  uninstallDriver: () => ipcRenderer.invoke('uninstall-driver')
 })
 

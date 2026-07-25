@@ -6,6 +6,11 @@ const { SerialPort } = require('serialport')
 // 设置应用名称（影响任务管理器中主进程和子进程的显示名称）
 app.setName('meter host')
 
+// 设置 Windows AppUserModelId，使所有窗口在任务管理器中归组到同一应用
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.esp32usb.meter')
+}
+
 // 应用信息
 const APP_NAME = 'ESP32-USB-METER 上位机'
 const APP_VERSION = require('./package.json').version
@@ -85,6 +90,7 @@ let currentTheme = 'system' // 'light', 'dark', 'system'
 let mainWindow = null
 let curveWindow = null
 let firmwareWindow = null
+let driverWindow = null
 let serialPort = null
 let isReading = false
 let dataBuffer = Buffer.alloc(0)
@@ -237,6 +243,9 @@ function createMainWindow() {
     if (firmwareWindow && !firmwareWindow.isDestroyed()) {
       firmwareWindow.close()
     }
+    if (driverWindow && !driverWindow.isDestroyed()) {
+      driverWindow.close()
+    }
   })
 }
 
@@ -260,6 +269,9 @@ function createCurveWindow() {
     minHeight: Math.floor(windowHeight * 0.8),
     title: '实时数据曲线',
     center: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'curve.png')
+      : path.join(__dirname, 'build', 'curve.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -384,6 +396,9 @@ function createFirmwareWindow() {
     minHeight: 600,
     title: '固件更新',
     center: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'update.png')
+      : path.join(__dirname, 'build', 'update.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -409,6 +424,52 @@ function createFirmwareWindow() {
   firmwareWindow.on('closed', () => {
     firmwareWindow = null
   })
+}
+
+// 创建驱动安装窗口
+function createDriverWindow() {
+  if (driverWindow && !driverWindow.isDestroyed()) {
+    driverWindow.focus()
+    return
+  }
+
+  driverWindow = new BrowserWindow({
+    width: 600,
+    height: 600,
+    minWidth: 450,
+    minHeight: 450,
+    title: '驱动安装',
+    center: true,
+    resizable: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'drive.png')
+      : path.join(__dirname, 'build', 'drive.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  })
+
+  driverWindow.loadFile(path.join(__dirname, 'driver.html'))
+
+  driverWindow.webContents.on('did-finish-load', () => {
+    driverWindow.webContents.send('theme-changed', getCurrentTheme())
+  })
+
+  driverWindow.on('closed', () => {
+    driverWindow = null
+  })
+}
+
+// 获取驱动文件所在目录（处理 asar 打包路径）
+function getDriverDir() {
+  const appPath = app.getAppPath()
+  // 打包后 asar 中，解包文件在 app.asar.unpacked/
+  if (appPath.endsWith('.asar')) {
+    return path.join(appPath + '.unpacked', 'drives', 'esp32-jtag-usb-drives')
+  }
+  return path.join(__dirname, 'drives', 'esp32-jtag-usb-drives')
 }
 
 // 判断是否为虚拟串口
@@ -899,6 +960,88 @@ ipcMain.handle('read-file', async (event, filePath) => {
   }
 })
 
+// 驱动安装（通过 PowerShell Start-Process -Verb RunAs 提权 + 临时文件捕获输出）
+function runPnputil(command, infPath) {
+  const { exec } = require('child_process')
+  const os = require('os')
+  const subCmd = command === 'add-driver' ? 'install' : 'uninstall'
+  const tmpOut = path.join(os.tmpdir(), `pnputil_out_${Date.now()}.txt`)
+  const psScript = path.join(os.tmpdir(), `pnputil_${Date.now()}.ps1`)
+
+  // PowerShell 单引号转义：单引号内反斜杠是字面量，只需处理内嵌单引号
+  const sq = (s) => "'" + s.replace(/'/g, "''") + "'"
+
+  // 两层结构：外层用 -Verb RunAs 启动内层 PowerShell，内层执行 pnputil 并写临时文件
+  const scriptContent = [
+    '$tmpOut = ' + sq(tmpOut),
+    '$infPath = ' + sq(infPath),
+    '',
+    '# 内层命令：设置 UTF-8 编码 + 执行 pnputil + 输出重定向到文件',
+    '$innerCmd = "chcp 65001 > `$null; pnputil /' + command + ' `"$infPath`" /' + subCmd + ' 2>&1 | Out-File -FilePath $tmpOut -Encoding UTF8"',
+    '',
+    '# 以管理员身份启动内层 PowerShell',
+    "Start-Process -FilePath powershell -ArgumentList '-NoProfile','-Command',$innerCmd -Verb RunAs -Wait -WindowStyle Hidden",
+    '',
+    'if (Test-Path $tmpOut) {',
+    '  Get-Content $tmpOut -Encoding UTF8 | Write-Output',
+    '  Remove-Item $tmpOut -Force',
+    '} else {',
+    "  Write-Output '操作已完成（无输出）'",
+    '}'
+  ].join('\n')
+
+  fs.writeFileSync(psScript, scriptContent, 'utf8')
+  console.log(`[DRIVER] 执行: pnputil /${command} /${subCmd}`)
+
+  return new Promise((resolve) => {
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${psScript}"`,
+      { timeout: 120000, encoding: 'utf8' },
+      (error, stdout, stderr) => {
+        // 清理临时脚本
+        try { fs.unlinkSync(psScript) } catch (_) { /* ignore */ }
+
+        const output = (stdout + stderr).trim()
+        if (error && !output) {
+          resolve({ success: false, message: `操作失败: ${error.message}` })
+          return
+        }
+        // pnputil 输出判断成功（不区分大小写）
+        const lowerOutput = output.toLowerCase()
+        const isSuccess = lowerOutput.includes('published') ||
+                          lowerOutput.includes('successfully') ||
+                          lowerOutput.includes('added driver packages') ||
+                          lowerOutput.includes('成功')
+        if (isSuccess) {
+          resolve({ success: true, message: output || '操作完成' })
+        } else {
+          resolve({ success: false, message: output || '操作失败，请尝试以管理员身份运行本程序' })
+        }
+      })
+  })
+}
+
+ipcMain.handle('install-driver', async () => {
+  const driverDir = getDriverDir()
+  const infPath = path.join(driverDir, 'USB_JTAG_debug_unit.inf')
+
+  if (!fs.existsSync(infPath)) {
+    return { success: false, message: `未找到驱动文件:\n${infPath}` }
+  }
+
+  return runPnputil('add-driver', infPath)
+})
+
+ipcMain.handle('uninstall-driver', async () => {
+  const driverDir = getDriverDir()
+  const infPath = path.join(driverDir, 'USB_JTAG_debug_unit.inf')
+
+  if (!fs.existsSync(infPath)) {
+    return { success: false, message: `未找到驱动文件:\n${infPath}` }
+  }
+
+  return runPnputil('delete-driver', infPath)
+})
+
 // 延迟函数
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -1065,6 +1208,15 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+U',
           click: () => {
             createFirmwareWindow()
+          }
+        },
+        {
+          type: 'separator'
+        },
+        {
+          label: '安装驱动',
+          click: () => {
+            createDriverWindow()
           }
         }
       ]
