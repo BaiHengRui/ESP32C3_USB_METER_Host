@@ -116,7 +116,7 @@ ESP32C3_USB_METER_Host/
 ### v2.1.0 (2026-07-25)
 
 **驱动安装**
-- 工具菜单新增「安装驱动」选项，内置 ESP32-C3 USB JTAG 驱动
+- 工具菜单新增「安装驱动」选项，内置 ESP32 USB JTAG 驱动
 - 驱动窗口支持安装/卸载，通过 UAC 提权执行 pnputil
 - 驱动文件位于 `drives/esp32-jtag-usb-drives/`，打包时自动解包
 
