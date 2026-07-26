@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme } = requi
 const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
+const { scheduleStartupCheck, checkForUpdatesManually, registerUpdateIPC } = require('./update')
 
 // 设置应用名称（影响任务管理器中主进程和子进程的显示名称）
 app.setName('meter host')
@@ -1224,6 +1225,13 @@ function createMenu() {
       label: '帮助',
       submenu: [
         {
+          label: '检查更新',
+          click: () => {
+            checkForUpdatesManually()
+          }
+        },
+        { type: 'separator' },
+        {
           label: '关于',
           click: () => {
             const info = getVersionInfo()
@@ -1398,8 +1406,14 @@ app.whenReady().then(() => {
   loadConfig()
   addOperationLog('APP', 'START', `应用程序启动，版本=${APP_VERSION}`)
   
+  // 注册更新模块 IPC
+  registerUpdateIPC()
+
   createMenu()
   createMainWindow()
+
+  // 启动后延迟检查更新
+  scheduleStartupCheck()
 })
 
 app.on('activate', () => {

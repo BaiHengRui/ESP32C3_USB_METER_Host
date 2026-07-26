@@ -227,6 +227,23 @@ function setupIPCListeners() {
   window.electronAPI.onMenuRefreshPorts(() => {
     refreshPorts()
   })
+
+  // ========== 应用更新事件 ==========
+  window.electronAPI.onUpdateAvailable((info) => {
+    showUpdatePanel(info)
+  })
+
+  window.electronAPI.onUpdateProgress((progress) => {
+    updateProgressUI(progress)
+  })
+
+  window.electronAPI.onUpdateComplete((info) => {
+    showUpdateComplete(info)
+  })
+
+  window.electronAPI.onUpdateError((error) => {
+    showUpdateError(error)
+  })
 }
 
 // 切换串口状态
@@ -406,6 +423,229 @@ function appendLog(text, type = 'recv') {
   if (elements.autoScrollCheck.checked) {
     elements.logArea.scrollTop = elements.logArea.scrollHeight
   }
+}
+
+// =============================================
+//  应用更新 UI 逻辑
+// =============================================
+
+const updateUI = {
+  overlay: document.getElementById('updateOverlay'),
+  modal: document.getElementById('updateModal'),
+  stateInfo: document.getElementById('updateStateInfo'),
+  stateProgress: document.getElementById('updateStateProgress'),
+  stateComplete: document.getElementById('updateStateComplete'),
+
+  closeBtn: document.getElementById('updateCloseBtn'),
+  downloadBtn: document.getElementById('updateDownloadBtn'),
+  dismissBtn: document.getElementById('updateDismissBtn'),
+  viewReleaseBtn: document.getElementById('updateViewReleaseBtn'),
+  cancelBtn: document.getElementById('updateCancelBtn'),
+
+  newVersion: document.getElementById('updateNewVersion'),
+  currentVersion: document.getElementById('updateCurrentVersion'),
+  assetInfo: document.getElementById('updateAssetInfo'),
+  changelog: document.getElementById('updateChangelog'),
+  progressFill: document.getElementById('updateProgressFill'),
+  percent: document.getElementById('updatePercent'),
+  speed: document.getElementById('updateSpeed'),
+  remaining: document.getElementById('updateRemaining'),
+  sizeInfo: document.getElementById('updateSizeInfo'),
+  progressTitle: document.getElementById('updateProgressTitle'),
+  completeTitle: document.getElementById('updateCompleteTitle'),
+  completeSub: document.getElementById('updateCompleteSub'),
+  completeActions: document.getElementById('updateCompleteActions')
+}
+
+let updateDownloading = false
+
+// 简单的 Markdown → HTML 转换（支持 GitHub Release 格式）
+function markdownToHTML(md) {
+  if (!md) return '<p>暂无更新日志</p>'
+
+  let html = md
+    // 转义 HTML
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // 粗体
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // 行内代码
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    // 链接
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+    // 分割线
+    .replace(/^---+/gm, '<hr>')
+    // ### 标题
+    .replace(/^###\s+(.+)$/gm, '<h4>$1</h4>')
+    // ## 标题
+    .replace(/^##\s+(.+)$/gm, '<h3>$1</h3>')
+    // 无序列表项
+    .replace(/^[\s]*[-*]\s+(.+)$/gm, '<li>$1</li>')
+    // 换行处理
+    .replace(/\r\n/g, '\n')
+
+  // 包裹连续的 <li>
+  html = html.replace(/(<li>[\s\S]*?<\/li>)/g, (match) => {
+    if (!match.includes('\n\n') && !match.includes('<h') && !match.includes('<hr')) {
+      return '<ul>' + match + '</ul>'
+    }
+    return match
+  })
+
+  // 段落：连续两个换行
+  html = html.replace(/\n\n+/g, '</p><p>')
+  html = '<p>' + html + '</p>'
+  // 清理空段落和多余标签
+  html = html.replace(/<p>\s*<\/p>/g, '')
+  html = html.replace(/<p>(<h[34]>)/g, '$1')
+  html = html.replace(/(<\/h[34]>)<\/p>/g, '$1')
+  html = html.replace(/<p>(<ul>)/g, '$1')
+  html = html.replace(/(<\/ul>)<\/p>/g, '$1')
+  html = html.replace(/<p>(<hr>)<\/p>/g, '$1')
+
+  return html
+}
+
+function showOverlay() {
+  updateUI.overlay.style.display = 'flex'
+}
+
+function hideOverlay() {
+  if (updateDownloading) return
+  updateUI.overlay.style.display = 'none'
+}
+
+function showUpdatePanel(info) {
+  if (updateDownloading) return
+
+  updateUI.newVersion.textContent = `v${info.version}`
+  updateUI.currentVersion.textContent = info.currentVersion || '--'
+  updateUI.assetInfo.textContent = `${info.assetName} · ${info.assetSize}`
+  updateUI.changelog.innerHTML = markdownToHTML(info.body)
+
+  updateUI.stateInfo.style.display = 'flex'
+  updateUI.stateProgress.style.display = 'none'
+  updateUI.stateComplete.style.display = 'none'
+  updateUI.closeBtn.style.display = 'block'
+  showOverlay()
+
+  updateUI.downloadBtn.onclick = async () => {
+    updateDownloading = true
+    updateUI.closeBtn.style.display = 'none'
+    showProgressState()
+    await window.electronAPI.startUpdate()
+  }
+  updateUI.dismissBtn.onclick = hideOverlay
+  updateUI.viewReleaseBtn.onclick = () => {
+    window.electronAPI.openReleasePage()
+  }
+  updateUI.cancelBtn.onclick = async () => {
+    await window.electronAPI.cancelUpdate()
+    updateDownloading = false
+    updateUI.closeBtn.style.display = 'block'
+    hideOverlay()
+  }
+  // 关闭按钮
+  updateUI.closeBtn.onclick = hideOverlay
+  // 点击遮罩关闭
+  updateUI.overlay.onclick = (e) => {
+    if (e.target === updateUI.overlay) hideOverlay()
+  }
+}
+
+function showProgressState() {
+  updateUI.stateInfo.style.display = 'none'
+  updateUI.stateProgress.style.display = 'flex'
+  updateUI.stateComplete.style.display = 'none'
+
+  updateUI.progressTitle.textContent = '正在下载更新...'
+  updateUI.percent.textContent = '0%'
+  updateUI.progressFill.style.width = '0%'
+  updateUI.speed.textContent = '正在连接...'
+  updateUI.remaining.textContent = ''
+  updateUI.sizeInfo.textContent = ''
+}
+
+function updateProgressUI(progress) {
+  updateUI.stateInfo.style.display = 'none'
+  updateUI.stateProgress.style.display = 'flex'
+  updateUI.stateComplete.style.display = 'none'
+
+  if (progress.status === 'processing') {
+    updateUI.progressTitle.textContent = '正在处理更新包...'
+    updateUI.speed.textContent = '正在解压...'
+    updateUI.remaining.textContent = ''
+    return
+  }
+
+  if (progress.status === 'retry') {
+    updateUI.progressTitle.textContent = '正在下载更新...'
+    updateUI.progressFill.style.width = '0%'
+    updateUI.percent.textContent = '0%'
+    updateUI.speed.textContent = progress.speed || '切换下载源...'
+    updateUI.remaining.textContent = ''
+    updateUI.sizeInfo.textContent = ''
+    return
+  }
+
+  updateUI.percent.textContent = `${progress.percent}%`
+  updateUI.progressFill.style.width = `${progress.percent}%`
+  updateUI.speed.textContent = progress.speed || '--'
+  updateUI.remaining.textContent = progress.remaining ? `剩余 ${progress.remaining}` : ''
+
+  if (progress.downloadedStr && progress.totalStr) {
+    updateUI.sizeInfo.textContent = `${progress.downloadedStr} / ${progress.totalStr}`
+  }
+}
+
+function showUpdateComplete(info) {
+  updateDownloading = false
+  updateUI.closeBtn.style.display = 'block'
+  updateUI.stateInfo.style.display = 'none'
+  updateUI.stateProgress.style.display = 'none'
+  updateUI.stateComplete.style.display = 'flex'
+
+  if (info.appFormat === 'unpacked' || info.scriptFile) {
+    updateUI.completeTitle.textContent = '更新已准备就绪！'
+    updateUI.completeSub.textContent = '点击「立即重启」将关闭当前程序并自动完成更新。'
+    updateUI.completeActions.innerHTML = `
+      <button id="updateRestartBtn" class="update-btn update-btn-success">立即重启</button>
+      <button id="updateLaterBtn" class="update-btn update-btn-ghost">稍后</button>
+    `
+    document.getElementById('updateRestartBtn').onclick = () => {
+      window.electronAPI.restartApp()
+    }
+    document.getElementById('updateLaterBtn').onclick = hideOverlay
+  } else {
+    updateUI.completeTitle.textContent = '下载完成！'
+    updateUI.completeSub.textContent = `新版本已保存到:\n${info.filePath}`
+    updateUI.completeActions.innerHTML = `
+      <button id="updateOpenFolderBtn" class="update-btn update-btn-primary">打开文件夹</button>
+      <button id="updateGotItBtn" class="update-btn update-btn-ghost">知道了</button>
+    `
+    document.getElementById('updateOpenFolderBtn').onclick = () => {
+      window.electronAPI.openUpdateFolder(info.filePath)
+    }
+    document.getElementById('updateGotItBtn').onclick = hideOverlay
+  }
+}
+
+function showUpdateError(error) {
+  updateDownloading = false
+  updateUI.closeBtn.style.display = 'block'
+  updateUI.stateInfo.style.display = 'flex'
+  updateUI.stateProgress.style.display = 'none'
+  updateUI.stateComplete.style.display = 'none'
+
+  if (error.message === '下载已取消') {
+    hideOverlay()
+    return
+  }
+
+  updateUI.newVersion.textContent = '更新失败'
+  updateUI.changelog.innerHTML = markdownToHTML(error.message || '未知错误')
+  updateUI.downloadBtn.textContent = '重试'
+  updateUI.downloadBtn.className = 'update-btn update-btn-primary'
+  updateUI.dismissBtn.textContent = '关闭'
 }
 
 // 清空日志

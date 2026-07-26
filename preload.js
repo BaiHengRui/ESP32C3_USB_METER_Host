@@ -121,6 +121,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 驱动安装
   installDriver: () => ipcRenderer.invoke('install-driver'),
-  uninstallDriver: () => ipcRenderer.invoke('uninstall-driver')
+  uninstallDriver: () => ipcRenderer.invoke('uninstall-driver'),
+
+  // ========== 应用更新 ==========
+  // IPC 调用
+  startUpdate: () => ipcRenderer.invoke('start-update'),
+  cancelUpdate: () => ipcRenderer.invoke('cancel-update'),
+  restartApp: () => ipcRenderer.invoke('restart-app'),
+  openUpdateFolder: (filePath) => ipcRenderer.invoke('open-update-folder', filePath),
+  openReleasePage: () => ipcRenderer.invoke('open-release-page'),
+
+  // 事件监听
+  onUpdateAvailable: (callback) => {
+    const listener = (event, info) => callback(info)
+    ipcRenderer.on('update-available', listener)
+    return () => ipcRenderer.removeListener('update-available', listener)
+  },
+  onUpdateProgress: (callback) => {
+    const listener = (event, progress) => callback(progress)
+    ipcRenderer.on('update-download-progress', listener)
+    return () => ipcRenderer.removeListener('update-download-progress', listener)
+  },
+  onUpdateComplete: (callback) => {
+    const listener = (event, info) => callback(info)
+    ipcRenderer.on('update-download-complete', listener)
+    return () => ipcRenderer.removeListener('update-download-complete', listener)
+  },
+  onUpdateError: (callback) => {
+    const listener = (event, error) => callback(error)
+    ipcRenderer.on('update-error', listener)
+    return () => ipcRenderer.removeListener('update-error', listener)
+  }
 })
 
