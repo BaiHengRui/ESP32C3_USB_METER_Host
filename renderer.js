@@ -4,6 +4,8 @@
 // 状态变量
 let isConnected = false
 let logLines = []
+let waitingForInfo = false   // 是否正在等待 info 命令的响应
+let infoLineCount = 0        // 已收到的 info 响应行数
 
 // DOM 元素
 const elements = {
@@ -14,6 +16,12 @@ const elements = {
   refreshPortsBtn: document.getElementById('refreshPortsBtn'),
   statusDot: document.getElementById('statusDot'),
   statusText: document.getElementById('statusText'),
+
+  // 设备信息
+  deviceInfo: document.getElementById('deviceInfo'),
+  devSN: document.getElementById('devSN'),
+  devSW: document.getElementById('devSW'),
+  devHW: document.getElementById('devHW'),
 
   // 控制区域
   brightnessRange: document.getElementById('brightnessRange'),
@@ -184,7 +192,11 @@ function setupEventListeners() {
   setupThresholdStepper('thrEndI', 10)
 
   // 常用命令
-  elements.queryInfoBtn.addEventListener('click', () => sendCommand('info'))
+  elements.queryInfoBtn.addEventListener('click', () => {
+    waitingForInfo = true
+    infoLineCount = 0
+    sendCommand('info')
+  })
   elements.helpBtn.addEventListener('click', () => sendCommand('help'))
   elements.resetDefaultsBtn.addEventListener('click', resetDefaults)
   elements.openFirmwareBtn.addEventListener('click', openFirmwareWindow)
@@ -206,17 +218,27 @@ function setupIPCListeners() {
   // 串口数据
   window.electronAPI.onSerialData((data) => {
     appendLog(`接收: ${data}`, 'recv')
+    // 如果正在等待 info 响应，尝试解析
+    if (waitingForInfo) {
+      parseInfoLine(data)
+    }
   })
 
   // 串口错误
   window.electronAPI.onSerialError((error) => {
     appendLog(`[错误] ${error}`, 'error')
     updateConnectionStatus(false)
+    waitingForInfo = false
+    infoLineCount = 0
+    elements.deviceInfo.style.display = 'none'
   })
 
   // 串口关闭
   window.electronAPI.onSerialClosed(() => {
     updateConnectionStatus(false)
+    waitingForInfo = false
+    infoLineCount = 0
+    elements.deviceInfo.style.display = 'none'
   })
 
   // 菜单事件
@@ -270,6 +292,14 @@ async function openPort() {
     if (result.success) {
       updateConnectionStatus(true)
       appendLog(`[系统] 已连接到 ${port} @ ${baudRate}`, 'system')
+      // 连接后延时 300ms，等待设备就绪后自动发送 info 查询设备信息
+      setTimeout(async () => {
+        if (isConnected) {
+          waitingForInfo = true
+          infoLineCount = 0
+          await sendCommand('info')
+        }
+      }, 300)
     } else {
       alert(`无法打开串口: ${result.error}`)
     }
@@ -283,6 +313,10 @@ async function closePort() {
   try {
     await window.electronAPI.closePort()
     updateConnectionStatus(false)
+    waitingForInfo = false
+    infoLineCount = 0
+    // 隐藏设备信息
+    elements.deviceInfo.style.display = 'none'
     appendLog('[系统] 串口已关闭', 'system')
   } catch (err) {
     console.error('关闭串口失败:', err)
@@ -301,7 +335,7 @@ function updateConnectionStatus(connected) {
 // 发送命令
 async function sendCommand(cmd) {
   if (!isConnected) {
-    alert('请先打开串口！')
+    alert('请先连接！')
     return
   }
 
@@ -422,6 +456,73 @@ function appendLog(text, type = 'recv') {
 
   if (elements.autoScrollCheck.checked) {
     elements.logArea.scrollTop = elements.logArea.scrollHeight
+  }
+}
+
+// =============================================
+//  info 响应解析（从固件 info 命令输出中提取 SN/SW/HW 及控件值）
+// =============================================
+
+// 采样率字符串 → 值映射
+const SAMPLE_RATE_MAP = {
+  'fast': '0',
+  'normal': '1',
+  'slow': '2'
+}
+
+function parseInfoLine(line) {
+  infoLineCount++
+
+  // 提取 HW: xxx
+  let match = line.match(/^HW:\s*(.+)/)
+  if (match) {
+    elements.devHW.textContent = match[1].trim()
+    elements.deviceInfo.style.display = 'flex'
+    return
+  }
+
+  // 提取 SW: xxx
+  match = line.match(/^SW:\s*(.+)/)
+  if (match) {
+    elements.devSW.textContent = match[1].trim()
+    elements.deviceInfo.style.display = 'flex'
+    return
+  }
+
+  // 提取 SN ID: XXXXXXXX
+  match = line.match(/^SN ID:\s*(.+)/)
+  if (match) {
+    elements.devSN.textContent = match[1].trim()
+    elements.deviceInfo.style.display = 'flex'
+    return
+  }
+
+  // 提取屏幕亮度: xxx
+  match = line.match(/屏幕亮度:\s*(\d+)/)
+  if (match) {
+    const val = parseInt(match[1])
+    if (val >= 1 && val <= 100) {
+      elements.brightnessRange.value = val
+      elements.brightnessInput.value = val
+    }
+    return
+  }
+
+  // 提取采样率: Fast/Normal/Slow
+  match = line.match(/采样率:\s*(.+)/i)
+  if (match) {
+    const rateName = match[1].trim().toLowerCase()
+    const rateValue = SAMPLE_RATE_MAP[rateName]
+    if (rateValue !== undefined) {
+      elements.sampleRateSelect.value = rateValue
+    }
+    return
+  }
+
+  // 超过 20 行仍未收到有效信息，停止等待
+  if (infoLineCount > 20) {
+    waitingForInfo = false
+    infoLineCount = 0
   }
 }
 
