@@ -51,8 +51,10 @@ function getBuildTime() {
 }
 const BUILD_TIME = getBuildTime()
 
-// USB_CDC_Data 结构体大小
+// 旧版 USB_CDC_Data 结构体大小（单 0xAA 包头）
 const USB_CDC_DATA_SIZE = 44
+// 新版 USB_CDC_Data 结构体大小（0x55 0xAA 双包头）
+const USB_CDC_NEW_DATA_SIZE = 44
 
 // 读取版本信息文件
 function getVersionInfo() {
@@ -206,6 +208,117 @@ function parseUSBCDCData(data) {
     }
   } catch (err) {
     console.error('数据解析错误:', err)
+    return null
+  }
+}
+
+// 新版数据解析函数（0x55 0xAA 双包头，44 字节）
+function parseUSBCDCDataNew(data) {
+  try {
+    if (data.length !== USB_CDC_NEW_DATA_SIZE) {
+      return null
+    }
+
+    // Header 验证：0x55 0xAA
+    if (data[0] !== 0x55 || data[1] !== 0xAA) {
+      return null
+    }
+
+    // 校验和验证（XOR 所有字节，不含 checksum 自身）
+    let checksum = 0
+    for (let i = 0; i < USB_CDC_NEW_DATA_SIZE - 1; i++) {
+      checksum ^= data[i]
+    }
+    if (checksum !== data[USB_CDC_NEW_DATA_SIZE - 1]) {
+      console.log('新版校验和错误')
+      return null
+    }
+
+    let offset = 2
+
+    // pack_type (1 byte)：0x00=单包，0x01=分块开始，0x02=分块结束
+    const packType = data[offset]
+    offset += 1
+
+    // pack_index (2 bytes, uint16_t little-endian)：分块传输时的包索引，单包为 0
+    const packIndex = data.readUInt16LE(offset)
+    offset += 2
+
+    // pack_length (1 byte)
+    const packLength = data[offset]
+    offset += 1
+
+    // temperature_cpu (4 bytes, float little-endian) — ESP32 芯片温度
+    const temperatureCpu = data.readFloatLE(offset)
+    offset += 4
+
+    // temperature_adc (4 bytes, float little-endian) — INA228 温度传感器
+    const temperatureAdc = data.readFloatLE(offset)
+    offset += 4
+
+    // voltage (4 bytes, float little-endian)
+    const voltage = data.readFloatLE(offset)
+    offset += 4
+
+    // current (4 bytes, float little-endian)
+    const current = data.readFloatLE(offset)
+    offset += 4
+
+    // power (4 bytes, float little-endian) — 固件发送的原始功率值，仅供参考
+    const rawPower = data.readFloatLE(offset)
+    offset += 4
+
+    // energy_mWh (4 bytes, float little-endian)
+    const energyMWh = data.readFloatLE(offset)
+    offset += 4
+
+    // charge_mAh (4 bytes, float little-endian)
+    const chargeMAh = data.readFloatLE(offset)
+    offset += 4
+
+    // esp_time_us (8 bytes, uint64_t little-endian) — esp_timer_get_time() 微秒
+    const espTimeUs = Number(data.readBigUInt64LE(offset))
+    offset += 8
+
+    // current_direction (1 byte, bool)
+    const currentDirection = data[offset] !== 0
+
+    // === 宽松的数据有效性校验（仅过滤明显异常值） ===
+    if (voltage < 0 || voltage > 85) {           // VBUS: 0~85V
+      console.log('新版电压超 INA228 范围:', voltage)
+      return null
+    }
+    if (current < -50 || current > 50) {         // 配合分流器，典型 ±32A
+      console.log('新版电流超范围:', current)
+      return null
+    }
+    if (temperatureAdc < -40 || temperatureAdc > 150) { // 芯片温度传感器
+      console.log('新版温度超 INA228 范围:', temperatureAdc)
+      return null
+    }
+
+    // === 功率修正 ===
+    // 固件发送的功率值可能不准，使用电压×电流计算更可靠
+    const power = voltage * current
+
+    return {
+      header: 0xAA, // 兼容字段：新格式实际为 0x55 0xAA 双包头
+      packType,
+      packIndex,
+      packLength,
+      snid: 0, // 新格式无 snid 字段
+      temperatureCpu,
+      temperatureAdc,
+      voltage,
+      current,
+      power,
+      energyMWh,
+      chargeMAh,
+      espTimeUs,
+      currentDirection
+    }
+  } catch (err) {
+    console.error('新版数据解析错误:', err)
     return null
   }
 }
@@ -660,20 +773,40 @@ function closeSerialPort() {
   })
 }
 
+// 扫描缓冲区，查找下一个数据包头
+// 返回 { headerIndex, isNewFormat }；未找到返回 null
+// 新格式：0x55 0xAA 双包头；旧格式：0xAA 单包头
+function scanForHeader(buffer) {
+  const end = buffer.length - 1
+  for (let i = 0; i < end; i++) {
+    // 新格式：0x55 后紧跟 0xAA
+    if (buffer[i] === 0x55 && buffer[i + 1] === 0xAA) {
+      return { headerIndex: i, isNewFormat: true }
+    }
+    // 旧格式：0xAA（若前一个字节是 0x55，则它属于新格式头，跳过）
+    if (buffer[i] === 0xAA && (i === 0 || buffer[i - 1] !== 0x55)) {
+      return { headerIndex: i, isNewFormat: false }
+    }
+  }
+  return null
+}
+
 // 处理串口数据
 function handleSerialData(data) {
   // 将新数据追加到缓冲区
   dataBuffer = Buffer.concat([dataBuffer, data])
 
-  // 二进制模式：扫描缓冲区寻找 0xAA 包头
+  // 二进制模式：扫描缓冲区寻找数据包头（新格式 0x55 0xAA / 旧格式 0xAA）
   while (dataBuffer.length >= USB_CDC_DATA_SIZE) {
-    // 查找 0xAA 包头
-    const headerIndex = dataBuffer.indexOf(0xAA)
-    
-    if (headerIndex === -1) {
+    // 查找下一个数据包头
+    const found = scanForHeader(dataBuffer)
+
+    if (!found) {
       // 没有找到包头，退出循环，等待更多数据
       break
     }
+
+    const { headerIndex, isNewFormat } = found
 
     // 如果包头不在缓冲区开头，先处理前面的数据（作为文本）
     if (headerIndex > 0) {
@@ -683,19 +816,19 @@ function handleSerialData(data) {
       dataBuffer = Buffer.concat([textRemaining, dataBuffer.slice(headerIndex)])
     }
 
-    // 现在 dataBuffer[0] === 0xAA，检查是否有完整的 64 字节数据包
+    // 现在 dataBuffer[0] 为包头，检查是否有完整的数据包
     if (dataBuffer.length < USB_CDC_DATA_SIZE) {
       // 数据不完整，等待更多数据
       break
     }
 
     const packet = dataBuffer.slice(0, USB_CDC_DATA_SIZE)
-    const parsedData = parseUSBCDCData(packet)
-    
+    const parsedData = isNewFormat ? parseUSBCDCDataNew(packet) : parseUSBCDCData(packet)
+
     if (parsedData) {
       // 校验通过，提取数据包
       dataBuffer = dataBuffer.slice(USB_CDC_DATA_SIZE)
-      
+
       // 发送解析后的数据到渲染进程
       if (curveWindow && !curveWindow.isDestroyed()) {
         curveWindow.webContents.send('meter-data', parsedData)
@@ -704,7 +837,7 @@ function handleSerialData(data) {
         mainWindow.webContents.send('meter-data', parsedData)
       }
     } else {
-      // 校验失败，跳过当前字节继续寻找下一个 0xAA
+      // 校验失败，跳过当前字节继续寻找下一个包头
       dataBuffer = dataBuffer.slice(1)
     }
   }

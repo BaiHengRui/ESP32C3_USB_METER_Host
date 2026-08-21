@@ -1,4 +1,4 @@
 {
   "releaseNotes": "ESP32C3 USB 功率计上位机",
-  "changelog": ""
+  "changelog": "v2.4.0 (2026-08-21)\n- 新增新版数据包解析：0x55 0xAA 双包头格式（含 pack_type/pack_index/pack_length，移除 snid）\n- 上位机自动识别新旧协议，旧版单 0xAA 包头解析保持不变\n- 保留原有的 XOR 校验、数据有效性校验与功率修正逻辑"
 }
