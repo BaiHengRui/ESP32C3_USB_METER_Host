@@ -94,11 +94,20 @@ let mainWindow = null
 let curveWindow = null
 let firmwareWindow = null
 let driverWindow = null
+let offlineWindow = null
 let serialPort = null
 let isReading = false
 let dataBuffer = Buffer.alloc(0)
 let lastPort = ''
 let lastBaudRate = 921600
+
+// 离线数据导出状态 (收集固件分块导出的记录)
+let offlineExport = {
+  active: false,
+  meta: null,      // { path, bytes, count }
+  records: [],
+  received: 0
+}
 
 // 固件更新相关
 
@@ -360,6 +369,186 @@ function createMainWindow() {
     if (driverWindow && !driverWindow.isDestroyed()) {
       driverWindow.close()
     }
+    if (offlineWindow && !offlineWindow.isDestroyed()) {
+      offlineWindow.close()
+    }
+  })
+}
+
+// 创建离线数据查看窗口
+function createOfflineWindow() {
+  if (offlineWindow && !offlineWindow.isDestroyed()) {
+    offlineWindow.focus()
+    return
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay()
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize
+  const windowWidth = Math.floor(screenWidth * 0.9)
+  const windowHeight = Math.floor(screenHeight * 0.9)
+
+  offlineWindow = new BrowserWindow({
+    width: windowWidth,
+    height: windowHeight,
+    minWidth: Math.floor(windowWidth * 0.7),
+    minHeight: Math.floor(windowHeight * 0.7),
+    title: '离线数据查看',
+    center: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'icon.png')
+      : path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  })
+
+  offlineWindow.loadFile(path.join(__dirname, 'offline.html'))
+
+  const offlineMenuTemplate = [
+    {
+      label: '文件',
+      submenu: [
+        {
+          label: '保存数据为CSV',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => {
+            if (offlineWindow && !offlineWindow.isDestroyed()) {
+              offlineWindow.webContents.send('menu-offline-save')
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '关闭',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            if (offlineWindow && !offlineWindow.isDestroyed()) {
+              offlineWindow.close()
+            }
+          }
+        }
+      ]
+    },
+    {
+      label: '视图',
+      submenu: [
+        {
+          label: '刷新列表',
+          accelerator: 'F5',
+          click: () => {
+            if (offlineWindow && !offlineWindow.isDestroyed()) {
+              offlineWindow.webContents.send('menu-offline-list')
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '主题',
+          submenu: [
+            {
+              label: '亮色',
+              type: 'radio',
+              checked: currentTheme === 'light',
+              click: () => setTheme('light')
+            },
+            {
+              label: '暗色',
+              type: 'radio',
+              checked: currentTheme === 'dark',
+              click: () => setTheme('dark')
+            },
+            {
+              label: '跟随系统',
+              type: 'radio',
+              checked: currentTheme === 'system',
+              click: () => setTheme('system')
+            }
+          ]
+        },
+        { type: 'separator' },
+        {
+          label: '开发者工具',
+          accelerator: 'F12',
+          click: () => {
+            if (offlineWindow && !offlineWindow.isDestroyed()) {
+              offlineWindow.webContents.toggleDevTools()
+            }
+          }
+        }
+      ]
+    },
+    {
+      label: '工具',
+      submenu: [
+        {
+          label: '打开曲线界面',
+          accelerator: 'CmdOrCtrl+M',
+          click: () => {
+            createCurveWindow()
+          }
+        },
+        {
+          label: '离线数据查看',
+          accelerator: 'CmdOrCtrl+D',
+          click: () => {
+            createOfflineWindow()
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '固件更新',
+          accelerator: 'CmdOrCtrl+U',
+          click: () => {
+            createFirmwareWindow()
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '安装驱动',
+          click: () => {
+            createDriverWindow()
+          }
+        }
+      ]
+    },
+    {
+      label: '帮助',
+      submenu: [
+        {
+          label: '检查更新',
+          click: () => {
+            checkForUpdatesManually()
+          }
+        },
+        { type: 'separator' },
+        {
+          label: '关于',
+          click: () => {
+            const info = getVersionInfo()
+            dialog.showMessageBox(offlineWindow, {
+              type: 'info',
+              title: '关于',
+              message: `${APP_NAME}`,
+              detail: `版本: ${APP_VERSION}\n编译时间: ${BUILD_TIME}\n\n${info.releaseNotes}\n\n更新日志:\n${info.changelog}`
+            })
+          }
+        }
+      ]
+    }
+  ]
+
+  const offlineMenu = Menu.buildFromTemplate(offlineMenuTemplate)
+
+  // 窗口加载完成后设置菜单并发送当前主题（避免菜单在内容加载前设置导致不显示）
+  offlineWindow.webContents.on('did-finish-load', () => {
+    offlineWindow.setMenu(offlineMenu)
+    offlineWindow.webContents.send('theme-changed', getCurrentTheme())
+  })
+
+  offlineWindow.on('closed', () => {
+    offlineWindow = null
   })
 }
 
@@ -829,6 +1018,25 @@ function handleSerialData(data) {
       // 校验通过，提取数据包
       dataBuffer = dataBuffer.slice(USB_CDC_DATA_SIZE)
 
+      // 离线导出分块收集 (仅导出过程中: pack_type 0x01首/0x00中/0x02末)
+      if (offlineExport.active) {
+        const pt = parsedData.packType
+        if (pt === 0x01 || pt === 0x00 || pt === 0x02) {
+          offlineExport.records.push(parsedData)
+          offlineExport.received++
+          if (offlineWindow && !offlineWindow.isDestroyed()) {
+            offlineWindow.webContents.send('offline-export-record', {
+              record: parsedData,
+              index: offlineExport.received,
+              total: offlineExport.meta ? offlineExport.meta.count : null
+            })
+          }
+          if (pt === 0x02 || (offlineExport.meta && offlineExport.received >= offlineExport.meta.count)) {
+            finishOfflineExport()
+          }
+        }
+      }
+
       // 发送解析后的数据到渲染进程
       if (curveWindow && !curveWindow.isDestroyed()) {
         curveWindow.webContents.send('meter-data', parsedData)
@@ -865,15 +1073,59 @@ function processTextData(buffer) {
     // 检查是否为有效文本（过滤二进制数据）
     if (isValidText(lineBuffer)) {
       const line = lineBuffer.toString('utf8')
+
+      // 处理离线导出文本标记 (EXPORT:... / EXPORT_DONE)
+      handleOfflineTextLine(line)
+
       // 发送文本数据到渲染进程
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('serial-data', line)
+      }
+      if (offlineWindow && !offlineWindow.isDestroyed()) {
+        offlineWindow.webContents.send('serial-data', line)
       }
     }
   }
   
   // 返回未处理完的剩余数据（不再直接修改全局 dataBuffer）
   return tempBuffer
+}
+
+// 处理离线导出文本标记 (EXPORT:... / EXPORT_DONE)
+function handleOfflineTextLine(line) {
+  if (line.startsWith('EXPORT:')) {
+    // 格式: EXPORT:/m0001.dat:totalBytes:count
+    const body = line.slice('EXPORT:'.length)
+    const parts = body.split(':')
+    offlineExport.meta = {
+      path: parts[0] || '',
+      bytes: parseInt(parts[1], 10) || 0,
+      count: parseInt(parts[2], 10) || 0
+    }
+    offlineExport.records = []
+    offlineExport.received = 0
+    offlineExport.active = true
+    addOperationLog('STORAGE', 'EXPORT_START', `离线导出开始: ${offlineExport.meta.path} (${offlineExport.meta.count} 条)`)
+    if (offlineWindow && !offlineWindow.isDestroyed()) {
+      offlineWindow.webContents.send('offline-export-start', offlineExport.meta)
+    }
+  } else if (line === 'EXPORT_DONE') {
+    finishOfflineExport()
+  }
+}
+
+// 结束离线导出
+function finishOfflineExport() {
+  if (!offlineExport.active) return
+  offlineExport.active = false
+  const summary = {
+    path: offlineExport.meta ? offlineExport.meta.path : '',
+    count: offlineExport.received
+  }
+  addOperationLog('STORAGE', 'EXPORT_DONE', `离线导出完成: ${summary.count} 条`)
+  if (offlineWindow && !offlineWindow.isDestroyed()) {
+    offlineWindow.webContents.send('offline-export-done', summary)
+  }
 }
 
 // 检查数据是否为有效文本（过滤二进制数据）
@@ -1010,6 +1262,52 @@ ipcMain.handle('open-curve-window', async () => {
 ipcMain.handle('open-firmware-window', async () => {
   createFirmwareWindow()
   return { success: true }
+})
+
+ipcMain.handle('open-offline-window', async () => {
+  createOfflineWindow()
+  return { success: true }
+})
+
+// 导出指定条目 (index=0 表示当前选中条目)
+ipcMain.handle('offline-export', async (event, { index } = {}) => {
+  try {
+    // 复位导出状态, 准备收集
+    offlineExport.active = false
+    offlineExport.meta = null
+    offlineExport.records = []
+    offlineExport.received = 0
+
+    let cmd = 'export'
+    if (index && index > 0) {
+      cmd = `export:${index}`
+    }
+    await sendCommand(cmd)
+    addOperationLog('STORAGE', 'EXPORT_CMD', `发送导出命令: ${cmd}`)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 列出设备存储条目
+ipcMain.handle('offline-list', async () => {
+  try {
+    await sendCommand('export:list')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 清除设备全部离线条目
+ipcMain.handle('offline-erase', async () => {
+  try {
+    await sendCommand('export:erase')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
 })
 
 // === 固件烧录（主进程 serialport 方案，避免 Electron WebSerial 崩溃）===
@@ -1331,6 +1629,13 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+M',
           click: () => {
             createCurveWindow()
+          }
+        },
+        {
+          label: '离线数据查看',
+          accelerator: 'CmdOrCtrl+D',
+          click: () => {
+            createOfflineWindow()
           }
         },
         {

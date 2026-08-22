@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 窗口操作
   openCurveWindow: () => ipcRenderer.invoke('open-curve-window'),
   openFirmwareWindow: () => ipcRenderer.invoke('open-firmware-window'),
+  openOfflineWindow: () => ipcRenderer.invoke('open-offline-window'),
+
+  // 离线数据
+  offlineExport: (index) => ipcRenderer.invoke('offline-export', { index }),
+  offlineList: () => ipcRenderer.invoke('offline-list'),
+  offlineErase: () => ipcRenderer.invoke('offline-erase'),
 
   // 文件对话框
   saveDialog: (defaultName, filters) => ipcRenderer.invoke('save-dialog', { defaultName, filters }),
@@ -49,6 +55,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = () => callback()
     ipcRenderer.on('curve-window-closed', listener)
     return () => ipcRenderer.removeListener('curve-window-closed', listener)
+  },
+
+  // 离线数据事件
+  onOfflineExportStart: (callback) => {
+    const listener = (event, meta) => callback(meta)
+    ipcRenderer.on('offline-export-start', listener)
+    return () => ipcRenderer.removeListener('offline-export-start', listener)
+  },
+
+  onOfflineExportRecord: (callback) => {
+    const listener = (event, data) => callback(data)
+    ipcRenderer.on('offline-export-record', listener)
+    return () => ipcRenderer.removeListener('offline-export-record', listener)
+  },
+
+  onOfflineExportDone: (callback) => {
+    const listener = (event, summary) => callback(summary)
+    ipcRenderer.on('offline-export-done', listener)
+    return () => ipcRenderer.removeListener('offline-export-done', listener)
+  },
+
+  onMenuOfflineSave: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('menu-offline-save', listener)
+    return () => ipcRenderer.removeListener('menu-offline-save', listener)
+  },
+
+  onMenuOfflineList: (callback) => {
+    const listener = () => callback()
+    ipcRenderer.on('menu-offline-list', listener)
+    return () => ipcRenderer.removeListener('menu-offline-list', listener)
   },
 
   // 菜单事件

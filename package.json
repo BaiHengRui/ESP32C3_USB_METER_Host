@@ -1,6 +1,6 @@
 {
   "name": "esp32_usb_meter_host",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "ESP32 USB METER Host Application",
   "main": "main.js",
   "scripts": {
@@ -59,6 +59,7 @@
       "curve.html",
       "firmware.html",
       "driver.html",
+      "offline.html",
       "styles.css",
       "build-info.json",
       "version-info.json",

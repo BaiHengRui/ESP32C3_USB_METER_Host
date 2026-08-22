@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>离线数据查看</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="./node_modules/chart.js/dist/chart.umd.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      padding: 10px;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .offline-container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: calc(100vh - 20px);
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar .spacer {
+      flex: 1;
+    }
+    .status-text {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-family: 'Consolas', monospace;
+      white-space: nowrap;
+    }
+    .offline-main {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 10px;
+      flex: 1;
+      min-height: 0;
+    }
+    .left-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .left-panel .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .left-panel .card:first-child {
+      flex: 1;
+      min-height: 120px;
+    }
+    .left-panel .card:last-child {
+      flex: 1;
+    }
+    .entry-list {
+      list-style: none;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .entry-list li {
+      padding: 6px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: var(--text-primary);
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: flex;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .entry-list li:hover {
+      background: var(--bg-tertiary);
+    }
+    .entry-list li.selected {
+      border-color: var(--accent-blue);
+      background: var(--bg-tertiary);
+    }
+    .entry-list li .entry-meta {
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-height: 0;
+    }
+    .right-panel .card {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+    .summary-item {
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .summary-item .label {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .summary-item .value {
+      font-size: 15px;
+      font-weight: 600;
+      font-family: 'Consolas', monospace;
+    }
+    .table-wrap {
+      overflow: auto;
+      flex: 1;
+      min-height: 0;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    thead th {
+      position: sticky;
+      top: 0;
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      text-align: right;
+      padding: 6px 8px;
+      white-space: nowrap;
+      z-index: 1;
+      border-bottom: 1px solid var(--border-color);
+    }
+    tbody td {
+      padding: 4px 8px;
+      text-align: right;
+      white-space: nowrap;
+      font-family: 'Consolas', monospace;
+      border-bottom: 1px solid var(--border-color);
+    }
+    tbody tr:nth-child(even) {
+      background: rgba(128, 128, 128, 0.05);
+    }
+    .chart-card {
+      flex: 1;
+      min-height: 220px;
+    }
+    .chart-card .chart-box {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+    .chart-legend-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+      padding: 4px 8px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .legend-color {
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+    }
+    .log-area {
+      flex: 1;
+      min-height: 80px;
+      font-size: 11px;
+    }
+    .empty-hint {
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-align: center;
+      padding: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="offline-container">
+    <!-- 工具栏 -->
+    <div class="card" style="margin-bottom: 0;">
+      <div class="toolbar">
+        <button id="listBtn" class="btn btn-secondary">列出条目</button>
+        <select id="entrySelect" title="选择要导出的条目">
+          <option value="">(设备当前选中条目)</option>
+        </select>
+        <button id="exportBtn" class="btn btn-success">导出并查看</button>
+        <button id="eraseBtn" class="btn btn-danger">清除全部</button>
+        <span class="spacer"></span>
+        <button id="clearBtn" class="btn btn-warning">清空显示</button>
+        <button id="saveBtn" class="btn btn-secondary">保存 CSV</button>
+        <span class="status-text" id="statusLabel">状态: 待机</span>
+      </div>
+    </div>
+
+    <div class="offline-main">
+      <!-- 左侧: 条目列表 + 串口日志 -->
+      <div class="left-panel">
+        <div class="card">
+          <div class="card-header">设备离线条目</div>
+          <ul class="entry-list" id="entryList">
+            <li class="empty-hint">点击「列出条目」获取设备存储</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-header">串口日志</div>
+          <div class="log-area" id="logArea"></div>
+        </div>
+      </div>
+
+      <!-- 右侧: 统计 + 表格 + 曲线 -->
+      <div class="right-panel">
+        <div class="card" style="flex: none;">
+          <div class="card-header">统计信息</div>
+          <div class="summary-grid">
+            <div class="summary-item"><div class="label">记录数</div><div class="value" id="sumCount">0</div></div>
+            <div class="summary-item"><div class="label">电压均值</div><div class="value" id="sumVoltAvg">--</div></div>
+            <div class="summary-item"><div class="label">电压最大</div><div class="value" id="sumVoltMax">--</div></div>
+            <div class="summary-item"><div class="label">电流最大</div><div class="value" id="sumCurMax">--</div></div>
+            <div class="summary-item"><div class="label">功率最大</div><div class="value" id="sumPowMax">--</div></div>
+            <div class="summary-item"><div class="label">能量(mWh)</div><div class="value" id="sumEnergy">--</div></div>
+            <div class="summary-item"><div class="label">容量(mAh)</div><div class="value" id="sumCharge">--</div></div>
+            <div class="summary-item"><div class="label">时长</div><div class="value" id="sumDuration">--</div></div>
+          </div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-header">曲线预览</div>
+          <div class="chart-legend-row">
+            <label class="legend-item"><span class="legend-color" style="background:#3ddc84"></span>电压 (V)<input type="checkbox" id="showVoltCheck" checked></label>
+            <label class="legend-item"><span class="legend-color" style="background:#ff69b4"></span>电流 (A)<input type="checkbox" id="showCurrCheck" checked></label>
+            <label class="legend-item"><span class="legend-color" style="background:#ff9800"></span>功率 (W)<input type="checkbox" id="showPowCheck" checked></label>
+            <label class="legend-item"><span class="legend-color" style="background:#9932cc"></span>温度 (°C)<input type="checkbox" id="showTempCheck"></label>
+            <label class="legend-item"><span class="legend-color" style="background:#00bfff"></span>mAh<input type="checkbox" id="showMahCheck"></label>
+            <label class="legend-item"><span class="legend-color" style="background:#ff6347"></span>mWh<input type="checkbox" id="showMwhCheck"></label>
+          </div>
+          <div class="chart-box"><canvas id="chart"></canvas></div>
+        </div>
+
+        <div class="card" style="flex: none; height: 240px;">
+          <div class="card-header">记录数据</div>
+          <div class="table-wrap" id="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="text-align:left;">序号</th>
+                  <th>时间(s)</th>
+                  <th>电压(V)</th>
+                  <th>电流(A)</th>
+                  <th>功率(W)</th>
+                  <th>ADC温度(°C)</th>
+                  <th>CPU温度(°C)</th>
+                  <th>能量(mWh)</th>
+                  <th>容量(mAh)</th>
+                  <th style="text-align:left;">方向</th>
+                </tr>
+              </thead>
+              <tbody id="tableBody">
+                <tr><td colspan="10" class="empty-hint">暂无数据，点击「导出并查看」加载离线条目</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============ 离线数据查看逻辑 ============
+
+    // 固件 Storage_Record / Storage_FileHeader 结构尺寸 (pack(1))
+    const RECORD_SIZE = 47   // magic1 + seq4 + ts8 + 8*float32 + dir1 + checksum1
+    const HEADER_SIZE = 8    // magic0/1 + version + record_size + reserved4
+
+    Chart.defaults.font.family = "'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', 'Helvetica Neue', Arial, sans-serif"
+
+    // 状态
+    const entries = []      // { index, path, bytes, records }
+    const records = []      // 导出得到的记录
+    let exporting = false
+    let exportStartUs = null
+    let firstRecordUs = null
+
+    // DOM
+    const elements = {
+      listBtn: document.getElementById('listBtn'),
+      entrySelect: document.getElementById('entrySelect'),
+      exportBtn: document.getElementById('exportBtn'),
+      eraseBtn: document.getElementById('eraseBtn'),
+      clearBtn: document.getElementById('clearBtn'),
+      saveBtn: document.getElementById('saveBtn'),
+      statusLabel: document.getElementById('statusLabel'),
+      entryList: document.getElementById('entryList'),
+      logArea: document.getElementById('logArea'),
+      sumCount: document.getElementById('sumCount'),
+      sumVoltAvg: document.getElementById('sumVoltAvg'),
+      sumVoltMax: document.getElementById('sumVoltMax'),
+      sumCurMax: document.getElementById('sumCurMax'),
+      sumPowMax: document.getElementById('sumPowMax'),
+      sumEnergy: document.getElementById('sumEnergy'),
+      sumCharge: document.getElementById('sumCharge'),
+      sumDuration: document.getElementById('sumDuration'),
+      tableBody: document.getElementById('tableBody')
+    }
+
+    // ============ 日志 ============
+    function appendLog(text, type = 'recv') {
+      const timestamp = new Date().toLocaleTimeString()
+      const line = `[${timestamp}] ${text}`
+      const logLine = document.createElement('div')
+      logLine.className = `log-line log-${type}`
+      logLine.textContent = line
+      elements.logArea.appendChild(logLine)
+      elements.logArea.scrollTop = elements.logArea.scrollHeight
+    }
+
+    function setStatus(text) {
+      elements.statusLabel.textContent = `状态: ${text}`
+    }
+
+    // ============ 条目列表解析 ============
+    function parseListLine(line) {
+      // 形如: "  m0001.dat  1234 bytes" 或 "  /m0001.dat  1234 bytes"
+      const match = line.match(/^\s*\/?m(\d+)\.dat\s+(\d+)\s+bytes/)
+      if (!match) return null
+      const index = parseInt(match[1], 10)
+      const bytes = parseInt(match[2], 10)
+      const recordsCount = bytes > HEADER_SIZE ? Math.floor((bytes - HEADER_SIZE) / RECORD_SIZE) : 0
+      return { index, path: `/m${String(index).padStart(4, '0')}.dat`, bytes, records: recordsCount }
+    }
+
+    function renderEntries() {
+      elements.entryList.innerHTML = ''
+      elements.entrySelect.innerHTML = '<option value="">(设备当前选中条目)</option>'
+
+      if (entries.length === 0) {
+        const li = document.createElement('li')
+        li.className = 'empty-hint'
+        li.textContent = '(无条目)'
+        elements.entryList.appendChild(li)
+        return
+      }
+
+      entries.forEach(entry => {
+        const li = document.createElement('li')
+        const left = document.createElement('span')
+        left.textContent = `#${entry.index} ${entry.path}`
+        const meta = document.createElement('span')
+        meta.className = 'entry-meta'
+        meta.textContent = `${entry.records} 条 · ${entry.bytes} B`
+        li.appendChild(left)
+        li.appendChild(meta)
+        li.dataset.index = entry.index
+        li.addEventListener('click', () => {
+          elements.entrySelect.value = String(entry.index)
+          highlightSelected()
+        })
+        elements.entryList.appendChild(li)
+
+        const opt = document.createElement('option')
+        opt.value = String(entry.index)
+        opt.textContent = `#${entry.index} (${entry.records} 条)`
+        elements.entrySelect.appendChild(opt)
+      })
+      highlightSelected()
+    }
+
+    function highlightSelected() {
+      const sel = elements.entrySelect.value
+      Array.from(elements.entryList.children).forEach(li => {
+        li.classList.toggle('selected', li.dataset.index === sel)
+      })
+    }
+
+    // ============ 表格 / 图表 / 统计 ============
+    function fmtTime(sec) {
+      if (sec < 60) return `${sec.toFixed(1)}s`
+      if (sec < 3600) return `${Math.floor(sec / 60)}m${Math.floor(sec % 60)}s`
+      return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`
+    }
+
+    function appendRow(rec, idx) {
+      if (idx === 1) elements.tableBody.innerHTML = ''
+      const relSec = firstRecordUs != null ? (rec.espTimeUs - firstRecordUs) / 1000000 : 0
+      const row = elements.tableBody.insertRow()
+      row.insertCell().textContent = String(idx)
+      row.insertCell().textContent = relSec.toFixed(3)
+      row.insertCell().textContent = rec.voltage.toFixed(4)
+      row.insertCell().textContent = rec.current.toFixed(4)
+      row.insertCell().textContent = rec.power.toFixed(4)
+      row.insertCell().textContent = rec.temperatureAdc.toFixed(2)
+      row.insertCell().textContent = rec.temperatureCpu.toFixed(2)
+      row.insertCell().textContent = rec.energyMWh.toFixed(2)
+      row.insertCell().textContent = rec.chargeMAh.toFixed(2)
+      const dirCell = row.insertCell()
+      dirCell.textContent = rec.currentDirection ? '← 左' : '→ 右'
+      dirCell.style.textAlign = 'left'
+    }
+
+    function updateSummary() {
+      const n = records.length
+      elements.sumCount.textContent = String(n)
+      if (n === 0) {
+        elements.sumVoltAvg.textContent = '--'
+        elements.sumVoltMax.textContent = '--'
+        elements.sumCurMax.textContent = '--'
+        elements.sumPowMax.textContent = '--'
+        elements.sumEnergy.textContent = '--'
+        elements.sumCharge.textContent = '--'
+        elements.sumDuration.textContent = '--'
+        return
+      }
+      let vSum = 0, vMax = -Infinity, cMax = -Infinity, pMax = -Infinity
+      records.forEach(r => {
+        vSum += r.voltage
+        if (r.voltage > vMax) vMax = r.voltage
+        if (Math.abs(r.current) > cMax) cMax = Math.abs(r.current)
+        if (Math.abs(r.power) > pMax) pMax = Math.abs(r.power)
+      })
+      elements.sumVoltAvg.textContent = (vSum / n).toFixed(4) + ' V'
+      elements.sumVoltMax.textContent = vMax.toFixed(4) + ' V'
+      elements.sumCurMax.textContent = cMax.toFixed(4) + ' A'
+      elements.sumPowMax.textContent = pMax.toFixed(4) + ' W'
+      elements.sumEnergy.textContent = records[records.length - 1].energyMWh.toFixed(2) + ' mWh'
+      elements.sumCharge.textContent = records[records.length - 1].chargeMAh.toFixed(2) + ' mAh'
+      const duration = (records[records.length - 1].espTimeUs - records[0].espTimeUs) / 1000000
+      elements.sumDuration.textContent = fmtTime(duration)
+    }
+
+    // 曲线 (相对秒 → 电压/电流/功率)
+    const chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: {
+        datasets: [
+          { label: '电压 (V)', data: [], borderColor: '#3ddc84', backgroundColor: '#3ddc84', pointBackgroundColor: '#3ddc84', pointBorderColor: '#3ddc84', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y' },
+          { label: '电流 (A)', data: [], borderColor: '#ff69b4', backgroundColor: '#ff69b4', pointBackgroundColor: '#ff69b4', pointBorderColor: '#ff69b4', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y1' },
+          { label: '功率 (W)', data: [], borderColor: '#ff9800', backgroundColor: '#ff9800', pointBackgroundColor: '#ff9800', pointBorderColor: '#ff9800', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y1' },
+          { label: '温度 (°C)', data: [], borderColor: '#9932cc', backgroundColor: '#9932cc', pointBackgroundColor: '#9932cc', pointBorderColor: '#9932cc', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y3', hidden: true },
+          { label: 'mAh', data: [], borderColor: '#00bfff', backgroundColor: '#00bfff', pointBackgroundColor: '#00bfff', pointBorderColor: '#00bfff', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y4', hidden: true },
+          { label: 'mWh', data: [], borderColor: '#ff6347', backgroundColor: '#ff6347', pointBackgroundColor: '#ff6347', pointBorderColor: '#ff6347', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y5', hidden: true }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        parsing: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        scales: {
+          x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
+          y: { type: 'linear', position: 'left', title: { display: true, text: '电压 (V)' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '电流 (A) / 功率 (W)' } },
+          y3: { type: 'linear', display: false, position: 'right', title: { display: true, text: '温度 (°C)' }, grid: { drawOnChartArea: false } },
+          y4: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'mAh' }, grid: { drawOnChartArea: false } },
+          y5: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'mWh' }, grid: { drawOnChartArea: false } }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: '#1a1a2e',
+            titleColor: '#00d9ff',
+            bodyColor: '#eaeaea',
+            borderColor: '#0066CC',
+            borderWidth: 1,
+            callbacks: {
+              title: function (context) {
+                return 'Time(s):' + context[0].parsed.x.toFixed(3)
+              }
+            }
+          }
+        }
+      }
+    })
+
+    function renderChart() {
+      const v = [], c = [], p = [], temp = [], mah = [], mwh = []
+      records.forEach(r => {
+        const t = firstRecordUs != null ? (r.espTimeUs - firstRecordUs) / 1000000 : 0
+        v.push({ x: t, y: r.voltage })
+        c.push({ x: t, y: r.current })
+        p.push({ x: t, y: r.power })
+        temp.push({ x: t, y: r.temperatureAdc })
+        mah.push({ x: t, y: r.chargeMAh })
+        mwh.push({ x: t, y: r.energyMWh })
+      })
+      chart.data.datasets[0].data = v
+      chart.data.datasets[1].data = c
+      chart.data.datasets[2].data = p
+      chart.data.datasets[3].data = temp
+      chart.data.datasets[4].data = mah
+      chart.data.datasets[5].data = mwh
+      chart.update('none')
+    }
+
+    function toggleDataset(index, visible) {
+      chart.setDatasetVisibility(index, visible)
+      const yAxisMap = { 3: 'y3', 4: 'y4', 5: 'y5' }
+      if (yAxisMap[index]) {
+        chart.options.scales[yAxisMap[index]].display = visible
+      }
+      chart.update('none')
+    }
+
+    function clearDisplay() {
+      records.length = 0
+      firstRecordUs = null
+      elements.tableBody.innerHTML = '<tr><td colspan="10" class="empty-hint">暂无数据，点击「导出并查看」加载离线条目</td></tr>'
+      updateSummary()
+      renderChart()
+    }
+
+    // ============ 操作 ============
+    async function ensurePortOpen() {
+      const open = await window.electronAPI.isPortOpen()
+      if (!open) {
+        alert('请先在主界面打开串口！')
+        return false
+      }
+      return true
+    }
+
+    async function listEntries() {
+      if (!await ensurePortOpen()) return
+      appendLog('发送: export:list', 'send')
+      const res = await window.electronAPI.offlineList()
+      if (!res.success) {
+        appendLog(`列出失败: ${res.error}`, 'error')
+        alert(`列出条目失败: ${res.error}`)
+      }
+    }
+
+    async function exportSelected() {
+      if (!await ensurePortOpen()) return
+      if (exporting) return
+
+      const index = parseInt(elements.entrySelect.value, 10) || 0
+      clearDisplay()
+      exporting = true
+      firstRecordUs = null
+      elements.exportBtn.disabled = true
+      setStatus(`导出中 (${index > 0 ? '#' + index : '当前选中条目'})...`)
+      appendLog(`发送: ${index > 0 ? 'export:' + index : 'export'}`, 'send')
+
+      const res = await window.electronAPI.offlineExport(index)
+      if (!res.success) {
+        exporting = false
+        elements.exportBtn.disabled = false
+        setStatus('导出失败')
+        appendLog(`导出失败: ${res.error}`, 'error')
+        alert(`导出失败: ${res.error}`)
+      }
+    }
+
+    async function eraseAll() {
+      if (!await ensurePortOpen()) return
+      if (!confirm('确定要清除设备上的全部离线条目吗？此操作不可恢复！')) return
+      appendLog('发送: export:erase', 'send')
+      const res = await window.electronAPI.offlineErase()
+      if (!res.success) {
+        appendLog(`清除失败: ${res.error}`, 'error')
+        alert(`清除失败: ${res.error}`)
+      } else {
+        setTimeout(listEntries, 500)
+      }
+    }
+
+    async function saveCSV() {
+      if (records.length === 0) {
+        alert('没有数据可保存！')
+        return
+      }
+      const now = new Date()
+      const defaultName = `offline_data_${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}_${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}.csv`
+
+      const result = await window.electronAPI.saveDialog(defaultName, [
+        { name: 'CSV Files', extensions: ['csv'] },
+        { name: 'All Files', extensions: ['*'] }
+      ])
+
+      if (result.filePath) {
+        let csv = '序号,时间(秒),时间戳(us),电压(V),电流(A),功率(W),ADC温度(°C),CPU温度(°C),能量(mWh),容量(mAh),方向\n'
+        records.forEach((r, i) => {
+          const relSec = firstRecordUs != null ? (r.espTimeUs - firstRecordUs) / 1000000 : 0
+          csv += `${i + 1},${relSec.toFixed(3)},${r.espTimeUs},`
+          csv += `${r.voltage.toFixed(4)},${r.current.toFixed(4)},${r.power.toFixed(4)},`
+          csv += `${r.temperatureAdc.toFixed(2)},${r.temperatureCpu.toFixed(2)},${r.energyMWh.toFixed(2)},${r.chargeMAh.toFixed(2)},${r.currentDirection ? '左' : '右'}\n`
+        })
+        const saveResult = await window.electronAPI.saveLogFile(result.filePath, '\ufeff' + csv)
+        if (saveResult.success) {
+          alert(`数据已保存至:\n${result.filePath}`)
+        } else {
+          alert(`保存失败: ${saveResult.error}`)
+        }
+      }
+    }
+
+    // ============ 事件绑定 ============
+    elements.listBtn.addEventListener('click', listEntries)
+    elements.exportBtn.addEventListener('click', exportSelected)
+    elements.eraseBtn.addEventListener('click', eraseAll)
+    elements.clearBtn.addEventListener('click', clearDisplay)
+    elements.saveBtn.addEventListener('click', saveCSV)
+    elements.entrySelect.addEventListener('change', highlightSelected)
+    document.getElementById('showVoltCheck').addEventListener('change', (e) => toggleDataset(0, e.target.checked))
+    document.getElementById('showCurrCheck').addEventListener('change', (e) => toggleDataset(1, e.target.checked))
+    document.getElementById('showPowCheck').addEventListener('change', (e) => toggleDataset(2, e.target.checked))
+    document.getElementById('showTempCheck').addEventListener('change', (e) => toggleDataset(3, e.target.checked))
+    document.getElementById('showMahCheck').addEventListener('change', (e) => toggleDataset(4, e.target.checked))
+    document.getElementById('showMwhCheck').addEventListener('change', (e) => toggleDataset(5, e.target.checked))
+
+    // 串口文本 (日志 + 条目列表)
+    window.electronAPI.onSerialData((line) => {
+      appendLog(`接收: ${line}`)
+      const entry = parseListLine(line)
+      if (entry) {
+        const existing = entries.find(e => e.index === entry.index)
+        if (existing) {
+          existing.bytes = entry.bytes
+          existing.records = entry.records
+        } else {
+          entries.push(entry)
+        }
+        renderEntries()
+      }
+    })
+
+    // 离线导出事件
+    window.electronAPI.onOfflineExportStart((meta) => {
+      setStatus(`导出中: ${meta.path} (${meta.count} 条)...`)
+      appendLog(`开始导出: ${meta.path} · ${meta.count} 条 · ${meta.bytes} 字节`, 'system')
+    })
+
+    window.electronAPI.onOfflineExportRecord(({ record, index, total }) => {
+      if (firstRecordUs == null) firstRecordUs = record.espTimeUs
+      records.push(record)
+      appendRow(record, index)
+      if (total) setStatus(`导出中: ${index}/${total}`)
+      else setStatus(`导出中: ${index} 条`)
+    })
+
+    window.electronAPI.onOfflineExportDone((summary) => {
+      exporting = false
+      elements.exportBtn.disabled = false
+      setStatus(`完成: ${summary.count} 条`)
+      appendLog(`导出完成: ${summary.count} 条`, 'system')
+      updateSummary()
+      renderChart()
+    })
+
+    window.electronAPI.onMenuOfflineSave(() => saveCSV())
+    window.electronAPI.onMenuOfflineList(() => listEntries())
+
+    // 主题
+    async function initTheme() {
+      const theme = await window.electronAPI.getTheme()
+      applyTheme(theme)
+    }
+    function applyTheme(theme) {
+      document.body.classList.remove('theme-light', 'theme-dark')
+      document.body.classList.add(`theme-${theme}`)
+    }
+    window.electronAPI.onThemeChanged((theme) => applyTheme(theme))
+
+    // 串口关闭时复位
+    window.electronAPI.onSerialClosed(() => {
+      exporting = false
+      elements.exportBtn.disabled = false
+      setStatus('串口已关闭')
+    })
+
+    // 初始化
+    initTheme()
+    ;(async () => {
+      // 若串口已打开, 自动刷新条目列表
+      try {
+        const open = await window.electronAPI.isPortOpen()
+        if (open) setTimeout(listEntries, 300)
+      } catch (e) { /* ignore */ }
+    })()
+  </script>
+</body>
+</html>

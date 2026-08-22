@@ -57,6 +57,7 @@ const elements = {
   resetDefaultsBtn: document.getElementById('resetDefaultsBtn'),
   openFirmwareBtn: document.getElementById('openFirmwareBtn'),
   openCurveBtn: document.getElementById('openCurveBtn'),
+  openOfflineBtn: document.getElementById('openOfflineBtn'),
 
   // 自定义命令
   customCmdInput: document.getElementById('customCmdInput'),
@@ -201,6 +202,7 @@ function setupEventListeners() {
   elements.resetDefaultsBtn.addEventListener('click', resetDefaults)
   elements.openFirmwareBtn.addEventListener('click', openFirmwareWindow)
   elements.openCurveBtn.addEventListener('click', openCurveWindow)
+  elements.openOfflineBtn.addEventListener('click', openOfflineWindow)
 
   // 自定义命令
   elements.sendCustomBtn.addEventListener('click', sendCustomCommand)
@@ -430,6 +432,11 @@ async function openCurveWindow() {
 // 打开固件更新窗口
 async function openFirmwareWindow() {
   await window.electronAPI.openFirmwareWindow()
+}
+
+// 打开离线数据窗口
+async function openOfflineWindow() {
+  await window.electronAPI.openOfflineWindow()
 }
 
 // 发送自定义命令
