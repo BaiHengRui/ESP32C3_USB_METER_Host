@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   offlineExport: (index) => ipcRenderer.invoke('offline-export', { index }),
   offlineList: () => ipcRenderer.invoke('offline-list'),
   offlineErase: () => ipcRenderer.invoke('offline-erase'),
+  offlineRecordStart: () => ipcRenderer.invoke('offline-record-start'),
+  offlineRecordStop: () => ipcRenderer.invoke('offline-record-stop'),
+  offlineRecordEnable: (enable) => ipcRenderer.invoke('offline-record-enable', { enable }),
+  offlineRecordInterval: (seconds) => ipcRenderer.invoke('offline-record-interval', { seconds }),
 
   // 文件对话框
   saveDialog: (defaultName, filters) => ipcRenderer.invoke('save-dialog', { defaultName, filters }),

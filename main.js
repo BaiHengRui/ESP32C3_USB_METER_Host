@@ -395,8 +395,8 @@ function createOfflineWindow() {
     title: '离线数据查看',
     center: true,
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'build', 'icon.png')
-      : path.join(__dirname, 'build', 'icon.png'),
+      ? path.join(process.resourcesPath, 'build', 'data.png')
+      : path.join(__dirname, 'build', 'data.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -1304,6 +1304,51 @@ ipcMain.handle('offline-list', async () => {
 ipcMain.handle('offline-erase', async () => {
   try {
     await sendCommand('export:erase')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 开始离线记录
+ipcMain.handle('offline-record-start', async () => {
+  try {
+    await sendCommand('rec:start')
+    addOperationLog('STORAGE', 'REC_START', '发送命令: rec:start')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 停止离线记录
+ipcMain.handle('offline-record-stop', async () => {
+  try {
+    await sendCommand('rec:stop')
+    addOperationLog('STORAGE', 'REC_STOP', '发送命令: rec:stop')
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 离线数据功能开关
+ipcMain.handle('offline-record-enable', async (event, { enable } = {}) => {
+  try {
+    const cmd = enable ? 'rec:enable:1' : 'rec:enable:0'
+    await sendCommand(cmd)
+    addOperationLog('STORAGE', 'REC_ENABLE', `发送命令: ${cmd}`)
+    return { success: true }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+// 设置离线记录间隔
+ipcMain.handle('offline-record-interval', async (event, { seconds } = {}) => {
+  try {
+    await sendCommand(`record:${seconds}`)
+    addOperationLog('STORAGE', 'REC_INTERVAL', `发送命令: record:${seconds}`)
     return { success: true }
   } catch (err) {
     return { success: false, error: err.message }

@@ -101,6 +101,51 @@
       flex-direction: column;
       min-height: 0;
     }
+    .export-progress {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      background: var(--bg-tertiary);
+      border-radius: 6px;
+    }
+    .export-progress[hidden] { display: none; }
+    .export-progress-label {
+      font-size: 12px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .export-progress-track {
+      flex: 1;
+      height: 8px;
+      background: var(--border-color);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .export-progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent-blue);
+      border-radius: 4px;
+      transition: width 0.12s ease;
+    }
+    .export-progress-fill.indeterminate {
+      width: 40%;
+      animation: progressIndeterminate 1.2s ease-in-out infinite;
+    }
+    @keyframes progressIndeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+    .export-progress-pct {
+      font-size: 12px;
+      color: var(--accent-blue);
+      font-family: 'Consolas', monospace;
+      white-space: nowrap;
+      min-width: 40px;
+      text-align: right;
+    }
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -144,11 +189,14 @@
       border-bottom: 1px solid var(--border-color);
     }
     tbody td {
-      padding: 4px 8px;
+      padding: 0 8px;
+      height: 24px;
+      line-height: 24px;
       text-align: right;
       white-space: nowrap;
       font-family: 'Consolas', monospace;
       border-bottom: 1px solid var(--border-color);
+      box-sizing: border-box;
     }
     tbody tr:nth-child(even) {
       background: rgba(128, 128, 128, 0.05);
@@ -185,6 +233,18 @@
       height: 12px;
       border-radius: 2px;
     }
+    .chart-zoom-hint {
+      font-size: 11px;
+      color: var(--text-secondary);
+      margin-left: auto;
+      user-select: none;
+    }
+    .chart-zoom-status {
+      font-size: 11px;
+      color: var(--accent-blue);
+      font-family: 'Consolas', monospace;
+      user-select: none;
+    }
     .log-area {
       flex: 1;
       min-height: 80px;
@@ -209,6 +269,22 @@
         </select>
         <button id="exportBtn" class="btn btn-success">导出并查看</button>
         <button id="eraseBtn" class="btn btn-danger">清除全部</button>
+        <span style="width: 1px; height: 22px; background: var(--border-color); margin: 0 4px;"></span>
+        <button id="recStartBtn" class="btn btn-success">开始记录</button>
+        <button id="recStopBtn" class="btn btn-warning">停止记录</button>
+        <select id="intervalSelect" title="离线记录间隔">
+          <option value="1" selected>间隔: 1s</option>
+          <option value="5">间隔: 5s</option>
+          <option value="10">间隔: 10s</option>
+          <option value="30">间隔: 30s</option>
+          <option value="60">间隔: 60s</option>
+        </select>
+        <button id="setIntervalBtn" class="btn btn-secondary">设置间隔</button>
+        <select id="enableSelect" title="离线数据功能开关">
+          <option value="1" selected>功能: 开</option>
+          <option value="0">功能: 关</option>
+        </select>
+        <button id="setEnableBtn" class="btn btn-secondary">设置开关</button>
         <span class="spacer"></span>
         <button id="clearBtn" class="btn btn-warning">清空显示</button>
         <button id="saveBtn" class="btn btn-secondary">保存 CSV</button>
@@ -235,6 +311,13 @@
       <div class="right-panel">
         <div class="card" style="flex: none;">
           <div class="card-header">统计信息</div>
+          <div class="export-progress" id="exportProgressWrap" hidden>
+            <span class="export-progress-label" id="exportProgressLabel">导出中</span>
+            <div class="export-progress-track">
+              <div class="export-progress-fill" id="exportProgressFill"></div>
+            </div>
+            <span class="export-progress-pct" id="exportProgressPct"></span>
+          </div>
           <div class="summary-grid">
             <div class="summary-item"><div class="label">记录数</div><div class="value" id="sumCount">0</div></div>
             <div class="summary-item"><div class="label">电压均值</div><div class="value" id="sumVoltAvg">--</div></div>
@@ -256,6 +339,8 @@
             <label class="legend-item"><span class="legend-color" style="background:#9932cc"></span>温度 (°C)<input type="checkbox" id="showTempCheck"></label>
             <label class="legend-item"><span class="legend-color" style="background:#00bfff"></span>mAh<input type="checkbox" id="showMahCheck"></label>
             <label class="legend-item"><span class="legend-color" style="background:#ff6347"></span>mWh<input type="checkbox" id="showMwhCheck"></label>
+            <span class="chart-zoom-hint">滚轮缩放 · 拖拽平移 · Shift+拖拽框选 · 双击/右键重置</span>
+            <span class="chart-zoom-status" id="zoomStatusText"></span>
           </div>
           <div class="chart-box"><canvas id="chart"></canvas></div>
         </div>
@@ -304,6 +389,15 @@
     let exportStartUs = null
     let firstRecordUs = null
 
+    // 曲线渲染序列 (相对秒 + 各指标)，导出完成后构建，供像素级抽稀使用
+    const series = { t: [], v: [], c: [], p: [], temp: [], mah: [], mwh: [] }
+    // 表格虚拟滚动：只渲染可视行，固定行高
+    const ROW_H = 24
+    const TABLE_OVERSCAN = 10
+    let tableRenderScheduled = false
+    // 导出进度条：当前导出量 / 总数据量
+    let exportTotalCount = null
+
     // DOM
     const elements = {
       listBtn: document.getElementById('listBtn'),
@@ -312,6 +406,12 @@
       eraseBtn: document.getElementById('eraseBtn'),
       clearBtn: document.getElementById('clearBtn'),
       saveBtn: document.getElementById('saveBtn'),
+      recStartBtn: document.getElementById('recStartBtn'),
+      recStopBtn: document.getElementById('recStopBtn'),
+      intervalSelect: document.getElementById('intervalSelect'),
+      setIntervalBtn: document.getElementById('setIntervalBtn'),
+      enableSelect: document.getElementById('enableSelect'),
+      setEnableBtn: document.getElementById('setEnableBtn'),
       statusLabel: document.getElementById('statusLabel'),
       entryList: document.getElementById('entryList'),
       logArea: document.getElementById('logArea'),
@@ -323,6 +423,7 @@
       sumEnergy: document.getElementById('sumEnergy'),
       sumCharge: document.getElementById('sumCharge'),
       sumDuration: document.getElementById('sumDuration'),
+      tableWrap: document.getElementById('tableWrap'),
       tableBody: document.getElementById('tableBody')
     }
 
@@ -339,6 +440,39 @@
 
     function setStatus(text) {
       elements.statusLabel.textContent = `状态: ${text}`
+    }
+
+    // ============ 导出进度条 ============
+    function showExportProgress(total) {
+      exportTotalCount = total
+      const wrap = document.getElementById('exportProgressWrap')
+      if (wrap) wrap.hidden = false
+      applyExportProgress(0, total)
+    }
+
+    function applyExportProgress(done, total) {
+      const fill = document.getElementById('exportProgressFill')
+      const pct = document.getElementById('exportProgressPct')
+      const label = document.getElementById('exportProgressLabel')
+      if (!fill) return
+      if (total && total > 0) {
+        const p = Math.min(100, Math.round(done / total * 100))
+        fill.classList.remove('indeterminate')
+        fill.style.width = p + '%'
+        pct.textContent = p + '%'
+        label.textContent = `导出中 ${done}/${total}`
+      } else {
+        fill.classList.add('indeterminate')
+        fill.style.width = '40%'
+        pct.textContent = ''
+        label.textContent = `导出中 ${done} 条`
+      }
+    }
+
+    function hideExportProgress() {
+      exportTotalCount = null
+      const wrap = document.getElementById('exportProgressWrap')
+      if (wrap) wrap.hidden = true
     }
 
     // ============ 条目列表解析 ============
@@ -378,6 +512,11 @@
           elements.entrySelect.value = String(entry.index)
           highlightSelected()
         })
+        li.addEventListener('dblclick', () => {
+          elements.entrySelect.value = String(entry.index)
+          highlightSelected()
+          exportSelected()
+        })
         elements.entryList.appendChild(li)
 
         const opt = document.createElement('option')
@@ -402,22 +541,61 @@
       return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`
     }
 
-    function appendRow(rec, idx) {
-      if (idx === 1) elements.tableBody.innerHTML = ''
+    function rowHtml(rec, idx) {
       const relSec = firstRecordUs != null ? (rec.espTimeUs - firstRecordUs) / 1000000 : 0
-      const row = elements.tableBody.insertRow()
-      row.insertCell().textContent = String(idx)
-      row.insertCell().textContent = relSec.toFixed(3)
-      row.insertCell().textContent = rec.voltage.toFixed(4)
-      row.insertCell().textContent = rec.current.toFixed(4)
-      row.insertCell().textContent = rec.power.toFixed(4)
-      row.insertCell().textContent = rec.temperatureAdc.toFixed(2)
-      row.insertCell().textContent = rec.temperatureCpu.toFixed(2)
-      row.insertCell().textContent = rec.energyMWh.toFixed(2)
-      row.insertCell().textContent = rec.chargeMAh.toFixed(2)
-      const dirCell = row.insertCell()
-      dirCell.textContent = rec.currentDirection ? '← 左' : '→ 右'
-      dirCell.style.textAlign = 'left'
+      const dirText = rec.currentDirection ? '← 左' : '→ 右'
+      const bg = idx % 2 === 0 ? ' style="background:rgba(128,128,128,0.05)"' : ''
+      return '<tr' + bg + '>' +
+        `<td>${idx}</td>` +
+        `<td>${relSec.toFixed(3)}</td>` +
+        `<td>${rec.voltage.toFixed(4)}</td>` +
+        `<td>${rec.current.toFixed(4)}</td>` +
+        `<td>${rec.power.toFixed(4)}</td>` +
+        `<td>${rec.temperatureAdc.toFixed(2)}</td>` +
+        `<td>${rec.temperatureCpu.toFixed(2)}</td>` +
+        `<td>${rec.energyMWh.toFixed(2)}</td>` +
+        `<td>${rec.chargeMAh.toFixed(2)}</td>` +
+        `<td style="text-align:left;">${dirText}</td>` +
+        '</tr>'
+    }
+
+    function spacerRow(h) {
+      return `<tr style="height:${h}px;background:transparent;"><td colspan="10" style="height:${h}px;padding:0;border:0;"></td></tr>`
+    }
+
+    // 虚拟滚动：仅渲染可视区间的行，上下用空行撑起滚动条
+    function renderTableVirtual() {
+      const n = records.length
+      if (n === 0) {
+        elements.tableBody.innerHTML = '<tr><td colspan="10" class="empty-hint">暂无数据，点击「导出并查看」加载离线条目</td></tr>'
+        return
+      }
+
+      const wrap = elements.tableWrap
+      const thead = wrap.querySelector('thead')
+      const theadH = thead ? thead.offsetHeight : 0
+      const viewH = wrap.clientHeight || 240
+      const scrollTop = wrap.scrollTop
+
+      const start = Math.max(0, Math.floor((scrollTop - theadH) / ROW_H) - TABLE_OVERSCAN)
+      const visibleCount = Math.ceil(viewH / ROW_H) + TABLE_OVERSCAN * 2
+      const end = Math.min(n, start + visibleCount)
+
+      let html = spacerRow(start * ROW_H)
+      for (let i = start; i < end; i++) {
+        html += rowHtml(records[i], i + 1)
+      }
+      html += spacerRow((n - end) * ROW_H)
+      elements.tableBody.innerHTML = html
+    }
+
+    function scheduleTableRender() {
+      if (tableRenderScheduled) return
+      tableRenderScheduled = true
+      requestAnimationFrame(() => {
+        tableRenderScheduled = false
+        renderTableVirtual()
+      })
     }
 
     function updateSummary() {
@@ -450,6 +628,100 @@
       elements.sumDuration.textContent = fmtTime(duration)
     }
 
+    // ========== 抽稀与缩放辅助 ==========
+    function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi) }
+
+    function getDataBounds() {
+      if (series.t.length === 0) return { dataMin: 0, dataMax: 10, totalRange: 10 }
+      const dMin = series.t[0]
+      const dMax = series.t[series.t.length - 1]
+      return { dataMin: dMin, dataMax: dMax, totalRange: Math.max(0.1, dMax - dMin) }
+    }
+
+    function buildSeries() {
+      const n = records.length
+      series.t.length = n
+      series.v.length = n
+      series.c.length = n
+      series.p.length = n
+      series.temp.length = n
+      series.mah.length = n
+      series.mwh.length = n
+      for (let i = 0; i < n; i++) {
+        const r = records[i]
+        const t = firstRecordUs != null ? (r.espTimeUs - firstRecordUs) / 1000000 : 0
+        series.t[i] = t
+        series.v[i] = r.voltage
+        series.c[i] = r.current
+        series.p[i] = r.power
+        series.temp[i] = r.temperatureAdc
+        series.mah[i] = r.chargeMAh
+        series.mwh[i] = r.energyMWh
+      }
+    }
+
+    function ensureSeries() {
+      if (series.t.length !== records.length) buildSeries()
+    }
+
+    // 像素级极值抽稀：按可视区间与画布像素宽度分桶，返回每桶 {x, y(均值), yMin, yMax}
+    function decimateLine(timeArr, valArr, xMin, xMax, pixelWidth) {
+      if (!timeArr || timeArr.length === 0) return []
+      const range = Math.max(1e-9, xMax - xMin)
+      const binCount = Math.max(1, Math.min(pixelWidth, 4000))
+      const binWidth = range / binCount
+      const sum = new Float64Array(binCount)
+      const cnt = new Uint32Array(binCount)
+      const mn = new Float64Array(binCount).fill(Infinity)
+      const mx = new Float64Array(binCount).fill(-Infinity)
+
+      for (let i = 0; i < timeArr.length; i++) {
+        const t = timeArr[i]
+        if (t < xMin || t > xMax) continue
+        const v = valArr[i]
+        if (!Number.isFinite(v)) continue
+        let b = Math.floor((t - xMin) / binWidth)
+        if (b < 0) b = 0
+        else if (b >= binCount) b = binCount - 1
+        sum[b] += v
+        cnt[b]++
+        if (v < mn[b]) mn[b] = v
+        if (v > mx[b]) mx[b] = v
+      }
+
+      const result = []
+      for (let b = 0; b < binCount; b++) {
+        if (cnt[b] > 0) {
+          result.push({ x: xMin + (b + 0.5) * binWidth, y: sum[b] / cnt[b], yMin: mn[b], yMax: mx[b] })
+        }
+      }
+      return result
+    }
+
+    // 框选放大选区绘制插件
+    const selectionRectPlugin = {
+      id: 'selectionRectPlugin',
+      afterDraw(chart, args, options) {
+        if (!options || !options.active || options.x1 == null) return
+        const ctx = chart.ctx
+        const x1 = Math.min(options.x1, options.x2)
+        const y1 = Math.min(options.y1, options.y2)
+        const x2 = Math.max(options.x1, options.x2)
+        const y2 = Math.max(options.y1, options.y2)
+        const w = x2 - x1
+        const h = y2 - y1
+        if (w < 3 && h < 3) return
+        ctx.save()
+        ctx.fillStyle = 'rgba(0, 217, 255, 0.10)'
+        ctx.fillRect(x1, y1, w, h)
+        ctx.strokeStyle = 'rgba(0, 217, 255, 0.60)'
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([5, 3])
+        ctx.strokeRect(x1, y1, w, h)
+        ctx.restore()
+      }
+    }
+
     // 曲线 (相对秒 → 电压/电流/功率)
     const chart = new Chart(document.getElementById('chart'), {
       type: 'line',
@@ -457,7 +729,7 @@
         datasets: [
           { label: '电压 (V)', data: [], borderColor: '#3ddc84', backgroundColor: '#3ddc84', pointBackgroundColor: '#3ddc84', pointBorderColor: '#3ddc84', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y' },
           { label: '电流 (A)', data: [], borderColor: '#ff69b4', backgroundColor: '#ff69b4', pointBackgroundColor: '#ff69b4', pointBorderColor: '#ff69b4', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y1' },
-          { label: '功率 (W)', data: [], borderColor: '#ff9800', backgroundColor: '#ff9800', pointBackgroundColor: '#ff9800', pointBorderColor: '#ff9800', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y1' },
+          { label: '功率 (W)', data: [], borderColor: '#ff9800', backgroundColor: '#ff9800', pointBackgroundColor: '#ff9800', pointBorderColor: '#ff9800', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y2' },
           { label: '温度 (°C)', data: [], borderColor: '#9932cc', backgroundColor: '#9932cc', pointBackgroundColor: '#9932cc', pointBorderColor: '#9932cc', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y3', hidden: true },
           { label: 'mAh', data: [], borderColor: '#00bfff', backgroundColor: '#00bfff', pointBackgroundColor: '#00bfff', pointBorderColor: '#00bfff', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y4', hidden: true },
           { label: 'mWh', data: [], borderColor: '#ff6347', backgroundColor: '#ff6347', pointBackgroundColor: '#ff6347', pointBorderColor: '#ff6347', borderWidth: 2, pointRadius: 0, pointHoverRadius: 5, tension: 0.2, yAxisID: 'y5', hidden: true }
@@ -470,9 +742,18 @@
         parsing: false,
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
         scales: {
-          x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
+          x: {
+            type: 'linear',
+            title: { display: true, text: '时间 (s)' },
+            ticks: {
+              maxTicksLimit: 12,
+              autoSkip: true,
+              autoSkipPadding: 12
+            }
+          },
           y: { type: 'linear', position: 'left', title: { display: true, text: '电压 (V)' } },
-          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '电流 (A) / 功率 (W)' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '电流 (A)' } },
+          y2: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '功率 (W)' } },
           y3: { type: 'linear', display: false, position: 'right', title: { display: true, text: '温度 (°C)' }, grid: { drawOnChartArea: false } },
           y4: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'mAh' }, grid: { drawOnChartArea: false } },
           y5: { type: 'linear', display: false, position: 'right', title: { display: true, text: 'mWh' }, grid: { drawOnChartArea: false } }
@@ -492,27 +773,270 @@
             }
           }
         }
-      }
+      },
+      plugins: [selectionRectPlugin]
     })
 
+    chart.options.plugins.selectionRectPlugin = { active: false }
+
     function renderChart() {
-      const v = [], c = [], p = [], temp = [], mah = [], mwh = []
-      records.forEach(r => {
-        const t = firstRecordUs != null ? (r.espTimeUs - firstRecordUs) / 1000000 : 0
-        v.push({ x: t, y: r.voltage })
-        c.push({ x: t, y: r.current })
-        p.push({ x: t, y: r.power })
-        temp.push({ x: t, y: r.temperatureAdc })
-        mah.push({ x: t, y: r.chargeMAh })
-        mwh.push({ x: t, y: r.energyMWh })
+      const n = records.length
+      if (n === 0) {
+        for (let i = 0; i < chart.data.datasets.length; i++) chart.data.datasets[i].data = []
+        chart.update('none')
+        updateZoomStatus()
+        return
+      }
+
+      ensureSeries()
+      const dataMin = series.t[0]
+      const dataMax = series.t[n - 1]
+
+      // 可视区间：优先用户缩放/平移后的 X 轴范围，否则全量
+      const xo = chart.options.scales.x
+      let xMin = (xo.min != null) ? xo.min : dataMin
+      let xMax = (xo.max != null) ? xo.max : dataMax
+      if (!(xMax > xMin)) { xMin = dataMin; xMax = dataMax }
+      xMin = Math.max(dataMin, xMin)
+      xMax = Math.min(dataMax, xMax)
+      if (xMax - xMin < 1e-9) { xMin = dataMin; xMax = dataMax }
+
+      const pixelW = Math.max(1, chart.chartArea ? chart.chartArea.width : (chart.canvas.clientWidth || 800))
+      const binCount = Math.max(1, Math.min(Math.floor(pixelW), 4000))
+
+      const fields = [
+        { arr: series.v, idx: 0, axis: 'y' },
+        { arr: series.c, idx: 1, axis: 'y1' },
+        { arr: series.p, idx: 2, axis: 'y2' },
+        { arr: series.temp, idx: 3, axis: null },
+        { arr: series.mah, idx: 4, axis: null },
+        { arr: series.mwh, idx: 5, axis: null }
+      ]
+
+      const yExtents = { y: { min: Infinity, max: -Infinity }, y1: { min: Infinity, max: -Infinity }, y2: { min: Infinity, max: -Infinity } }
+
+      fields.forEach(f => {
+        const dec = decimateLine(series.t, f.arr, xMin, xMax, binCount)
+        chart.data.datasets[f.idx].data = dec.map(d => ({ x: d.x, y: d.y }))
+        if (f.axis) {
+          dec.forEach(d => {
+            if (d.yMin < yExtents[f.axis].min) yExtents[f.axis].min = d.yMin
+            if (d.yMax > yExtents[f.axis].max) yExtents[f.axis].max = d.yMax
+          })
+        }
       })
-      chart.data.datasets[0].data = v
-      chart.data.datasets[1].data = c
-      chart.data.datasets[2].data = p
-      chart.data.datasets[3].data = temp
-      chart.data.datasets[4].data = mah
-      chart.data.datasets[5].data = mwh
+
+      // Y 轴基于可视区间极值(含 padding)，保证峰值不被裁剪
+      Object.keys(yExtents).forEach(id => {
+        const e = yExtents[id]
+        if (e.max > e.min) {
+          const range = e.max - e.min
+          const pad = range * 0.08 || 0.01
+          chart.options.scales[id].min = e.min - pad
+          chart.options.scales[id].max = e.max + pad
+        } else {
+          chart.options.scales[id].min = undefined
+          chart.options.scales[id].max = undefined
+        }
+      })
+
+      chart.options.scales.x.min = xMin
+      chart.options.scales.x.max = xMax
       chart.update('none')
+      updateZoomStatus()
+    }
+
+    function updateZoomStatus() {
+      const el = document.getElementById('zoomStatusText')
+      if (!el) return
+      if (records.length === 0) { el.textContent = ''; return }
+      const dataMin = series.t[0]
+      const dataMax = series.t[series.t.length - 1]
+      const xo = chart.options.scales.x
+      const vMin = xo.min != null ? xo.min : dataMin
+      const vMax = xo.max != null ? xo.max : dataMax
+      const win = vMax - vMin
+      const total = dataMax - dataMin
+      const pct = total > 0 ? (win / total * 100) : 100
+      el.textContent = `可视 ${vMin.toFixed(1)}~${vMax.toFixed(1)}s · ${win.toFixed(2)}s · ${pct.toFixed(0)}%`
+    }
+
+    // ========== 缩放 / 平移 / 框选 / 重置 ==========
+    const ZOOM_FACTOR = 1.15
+    const MIN_X_RANGE = 0.05
+
+    function zoomAtCursor(deltaY, clientX) {
+      if (records.length === 0) return
+      ensureSeries()
+      const rect = chart.canvas.getBoundingClientRect()
+      const px = clientX - rect.left
+      const xs = chart.scales.x
+      let t = null
+      if (xs) t = xs.getValueForPixel(px)
+
+      const { dataMin, dataMax, totalRange } = getDataBounds()
+      const xo = chart.options.scales.x
+      const curMin = xo.min != null ? xo.min : dataMin
+      const curMax = xo.max != null ? xo.max : dataMax
+      const xRange = Math.max(1e-9, curMax - curMin)
+      const center = (t != null && Number.isFinite(t)) ? t : (curMin + curMax) / 2
+
+      const factor = deltaY < 0 ? 1 / ZOOM_FACTOR : ZOOM_FACTOR
+      const newRange = clamp(xRange * factor, Math.min(MIN_X_RANGE, totalRange), Math.max(totalRange, MIN_X_RANGE))
+      const ratio = clamp((center - curMin) / xRange, 0, 1)
+      let newMin = center - newRange * ratio
+      let newMax = center + newRange * (1 - ratio)
+      if (newMin < dataMin) { newMin = dataMin; newMax = dataMin + newRange }
+      if (newMax > dataMax) { newMax = dataMax; newMin = dataMax - newRange }
+      newMin = Math.max(dataMin, newMin)
+      newMax = Math.min(dataMax, newMax)
+
+      chart.options.scales.x.min = newMin
+      chart.options.scales.x.max = newMax
+      renderChart()
+    }
+
+    function registerWheelZoom() {
+      chart.canvas.addEventListener('wheel', (evt) => {
+        if (records.length === 0) { evt.preventDefault(); return }
+        evt.preventDefault()
+        zoomAtCursor(evt.deltaY, evt.clientX)
+      }, { passive: false })
+    }
+
+    function registerPan() {
+      let isPanning = false
+      let startX = 0, startMin = 0, startMax = 0
+
+      chart.canvas.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return
+        if (evt.shiftKey || evt.ctrlKey) return
+        const rect = chart.canvas.getBoundingClientRect()
+        if (evt.clientX < rect.left || evt.clientX > rect.right) return
+        if (evt.clientY < rect.top || evt.clientY > rect.bottom) return
+        isPanning = true
+        startX = evt.clientX
+        ensureSeries()
+        const b = getDataBounds()
+        const xo = chart.options.scales.x
+        startMin = xo.min != null ? xo.min : b.dataMin
+        startMax = xo.max != null ? xo.max : b.dataMax
+        chart.canvas.style.cursor = 'grabbing'
+      })
+
+      document.addEventListener('mousemove', (evt) => {
+        if (!isPanning) return
+        evt.preventDefault()
+        const rect = chart.canvas.getBoundingClientRect()
+        const chartW = rect.right - rect.left
+        if (chartW <= 0) return
+        const { dataMin, dataMax } = getDataBounds()
+        const xRange = Math.max(1e-9, startMax - startMin)
+        const pxPerUnit = chartW / xRange
+        const dx = (startX - evt.clientX) / pxPerUnit
+        let newMin = startMin + dx
+        let newMax = startMax + dx
+        if (newMin < dataMin) { newMin = dataMin; newMax = dataMin + xRange }
+        if (newMax > dataMax) { newMax = dataMax; newMin = dataMax - xRange }
+        chart.options.scales.x.min = newMin
+        chart.options.scales.x.max = newMax
+        renderChart()
+      })
+
+      document.addEventListener('mouseup', () => {
+        if (isPanning) {
+          isPanning = false
+          chart.canvas.style.cursor = ''
+        }
+      })
+    }
+
+    function registerSelectionZoom() {
+      let isSelecting = false
+      let sx = 0, sy = 0, cx = 0, cy = 0
+
+      chart.canvas.addEventListener('mousedown', (evt) => {
+        if (evt.button !== 0) return
+        const rect = chart.canvas.getBoundingClientRect()
+        if (evt.clientX < rect.left || evt.clientX > rect.right) return
+        if (evt.clientY < rect.top || evt.clientY > rect.bottom) return
+        if (records.length === 0) return
+        if (!evt.shiftKey && !evt.ctrlKey) return
+
+        isSelecting = true
+        sx = evt.clientX - rect.left
+        sy = evt.clientY - rect.top
+        cx = sx
+        cy = sy
+        chart.options.plugins.selectionRectPlugin = { active: true, x1: sx, y1: sy, x2: cx, y2: cy }
+        chart.update('none')
+      })
+
+      document.addEventListener('mousemove', (evt) => {
+        if (!isSelecting) return
+        const rect = chart.canvas.getBoundingClientRect()
+        cx = evt.clientX - rect.left
+        cy = evt.clientY - rect.top
+        chart.options.plugins.selectionRectPlugin = { active: true, x1: sx, y1: sy, x2: cx, y2: cy }
+        chart.update('none')
+      })
+
+      document.addEventListener('mouseup', (evt) => {
+        if (!isSelecting) return
+        isSelecting = false
+
+        const rect = chart.canvas.getBoundingClientRect()
+        const ex = evt.clientX - rect.left
+        const ey = evt.clientY - rect.top
+        const dx = Math.abs(ex - sx)
+        const dy = Math.abs(ey - sy)
+
+        chart.options.plugins.selectionRectPlugin = { active: false }
+        if (dx < 5 && dy < 5) {
+          chart.update('none')
+          return
+        }
+
+        const xs = chart.scales.x
+        const t1 = xs ? xs.getValueForPixel(Math.min(sx, ex)) : null
+        const t2 = xs ? xs.getValueForPixel(Math.max(sx, ex)) : null
+        if (t1 == null || t2 == null) {
+          chart.update('none')
+          return
+        }
+
+        ensureSeries()
+        const { dataMin, dataMax } = getDataBounds()
+        let newMin = clamp(t1, dataMin, dataMax)
+        let newMax = clamp(t2, dataMin, dataMax)
+        if (newMax - newMin < MIN_X_RANGE) {
+          const mid = (newMin + newMax) / 2
+          newMin = Math.max(dataMin, mid - MIN_X_RANGE / 2)
+          newMax = Math.min(dataMax, mid + MIN_X_RANGE / 2)
+        }
+
+        chart.options.scales.x.min = newMin
+        chart.options.scales.x.max = newMax
+        renderChart()
+      })
+    }
+
+    function resetViewFull() {
+      chart.options.scales.x.min = undefined
+      chart.options.scales.x.max = undefined
+      ;['y', 'y1', 'y2', 'y3', 'y4', 'y5'].forEach(id => {
+        chart.options.scales[id].min = undefined
+        chart.options.scales[id].max = undefined
+      })
+      renderChart()
+    }
+
+    function registerReset() {
+      chart.canvas.addEventListener('dblclick', resetViewFull)
+      chart.canvas.addEventListener('contextmenu', (evt) => {
+        evt.preventDefault()
+        resetViewFull()
+      })
     }
 
     function toggleDataset(index, visible) {
@@ -527,7 +1051,20 @@
     function clearDisplay() {
       records.length = 0
       firstRecordUs = null
-      elements.tableBody.innerHTML = '<tr><td colspan="10" class="empty-hint">暂无数据，点击「导出并查看」加载离线条目</td></tr>'
+      series.t.length = 0
+      series.v.length = 0
+      series.c.length = 0
+      series.p.length = 0
+      series.temp.length = 0
+      series.mah.length = 0
+      series.mwh.length = 0
+      chart.options.scales.x.min = undefined
+      chart.options.scales.x.max = undefined
+      ;['y', 'y1', 'y2', 'y3', 'y4', 'y5'].forEach(id => {
+        chart.options.scales[id].min = undefined
+        chart.options.scales[id].max = undefined
+      })
+      renderTableVirtual()
       updateSummary()
       renderChart()
     }
@@ -544,6 +1081,9 @@
 
     async function listEntries() {
       if (!await ensurePortOpen()) return
+      // 清空旧列表，重新从设备拉取，避免已删除的条目残留
+      entries.length = 0
+      renderEntries()
       appendLog('发送: export:list', 'send')
       const res = await window.electronAPI.offlineList()
       if (!res.success) {
@@ -563,6 +1103,7 @@
       elements.exportBtn.disabled = true
       setStatus(`导出中 (${index > 0 ? '#' + index : '当前选中条目'})...`)
       appendLog(`发送: ${index > 0 ? 'export:' + index : 'export'}`, 'send')
+      showExportProgress(null)  // 先显示不定进度，等待 EXPORT 标记给出总量
 
       const res = await window.electronAPI.offlineExport(index)
       if (!res.success) {
@@ -570,6 +1111,7 @@
         elements.exportBtn.disabled = false
         setStatus('导出失败')
         appendLog(`导出失败: ${res.error}`, 'error')
+        hideExportProgress()
         alert(`导出失败: ${res.error}`)
       }
     }
@@ -583,7 +1125,66 @@
         appendLog(`清除失败: ${res.error}`, 'error')
         alert(`清除失败: ${res.error}`)
       } else {
+        // 清除命令已发送，但不能假定设备已擦除完成；
+        // 清空本地条目列表与数据展示（表格/统计/曲线）后重新查询设备真实条目列表。
+        entries.length = 0
+        renderEntries()
+        clearDisplay()
+        appendLog('清除命令已发送，重新查询设备条目列表...', 'system')
         setTimeout(listEntries, 500)
+      }
+    }
+
+    async function startRecording() {
+      if (!await ensurePortOpen()) return
+      appendLog('发送: rec:start', 'send')
+      const res = await window.electronAPI.offlineRecordStart()
+      if (!res.success) {
+        appendLog(`开始记录失败: ${res.error}`, 'error')
+        alert(`开始记录失败: ${res.error}`)
+      } else {
+        setStatus('开始记录命令已发送')
+      }
+    }
+
+    async function stopRecording() {
+      if (!await ensurePortOpen()) return
+      appendLog('发送: rec:stop', 'send')
+      const res = await window.electronAPI.offlineRecordStop()
+      if (!res.success) {
+        appendLog(`停止记录失败: ${res.error}`, 'error')
+        alert(`停止记录失败: ${res.error}`)
+      } else {
+        setStatus('停止记录命令已发送，刷新列表...')
+        // 停止并保存后，稍后刷新条目列表以显示新生成的记录文件
+        setTimeout(listEntries, 800)
+      }
+    }
+
+    async function setRecordInterval() {
+      if (!await ensurePortOpen()) return
+      const sec = parseInt(elements.intervalSelect.value, 10)
+      appendLog(`发送: record:${sec}`, 'send')
+      const res = await window.electronAPI.offlineRecordInterval(sec)
+      if (!res.success) {
+        appendLog(`设置间隔失败: ${res.error}`, 'error')
+        alert(`设置间隔失败: ${res.error}`)
+      } else {
+        setStatus(`记录间隔已设为 ${sec}s`)
+      }
+    }
+
+    async function setRecordEnable() {
+      if (!await ensurePortOpen()) return
+      const enable = parseInt(elements.enableSelect.value, 10) === 1
+      const cmd = enable ? 'rec:enable:1' : 'rec:enable:0'
+      appendLog(`发送: ${cmd}`, 'send')
+      const res = await window.electronAPI.offlineRecordEnable(enable)
+      if (!res.success) {
+        appendLog(`设置功能开关失败: ${res.error}`, 'error')
+        alert(`设置功能开关失败: ${res.error}`)
+      } else {
+        setStatus(enable ? '离线数据功能已开启' : '离线数据功能已关闭')
       }
     }
 
@@ -623,6 +1224,10 @@
     elements.eraseBtn.addEventListener('click', eraseAll)
     elements.clearBtn.addEventListener('click', clearDisplay)
     elements.saveBtn.addEventListener('click', saveCSV)
+    elements.recStartBtn.addEventListener('click', startRecording)
+    elements.recStopBtn.addEventListener('click', stopRecording)
+    elements.setIntervalBtn.addEventListener('click', setRecordInterval)
+    elements.setEnableBtn.addEventListener('click', setRecordEnable)
     elements.entrySelect.addEventListener('change', highlightSelected)
     document.getElementById('showVoltCheck').addEventListener('change', (e) => toggleDataset(0, e.target.checked))
     document.getElementById('showCurrCheck').addEventListener('change', (e) => toggleDataset(1, e.target.checked))
@@ -630,6 +1235,15 @@
     document.getElementById('showTempCheck').addEventListener('change', (e) => toggleDataset(3, e.target.checked))
     document.getElementById('showMahCheck').addEventListener('change', (e) => toggleDataset(4, e.target.checked))
     document.getElementById('showMwhCheck').addEventListener('change', (e) => toggleDataset(5, e.target.checked))
+
+    // 曲线交互：滚轮缩放 + 拖拽平移 + 框选放大 + 双击/右键重置
+    registerWheelZoom()
+    registerPan()
+    registerSelectionZoom()
+    registerReset()
+
+    // 表格虚拟滚动
+    elements.tableWrap.addEventListener('scroll', scheduleTableRender)
 
     // 串口文本 (日志 + 条目列表)
     window.electronAPI.onSerialData((line) => {
@@ -651,14 +1265,18 @@
     window.electronAPI.onOfflineExportStart((meta) => {
       setStatus(`导出中: ${meta.path} (${meta.count} 条)...`)
       appendLog(`开始导出: ${meta.path} · ${meta.count} 条 · ${meta.bytes} 字节`, 'system')
+      showExportProgress(meta.count)
     })
 
     window.electronAPI.onOfflineExportRecord(({ record, index, total }) => {
       if (firstRecordUs == null) firstRecordUs = record.espTimeUs
       records.push(record)
-      appendRow(record, index)
-      if (total) setStatus(`导出中: ${index}/${total}`)
-      else setStatus(`导出中: ${index} 条`)
+      scheduleTableRender()
+      applyExportProgress(index, (total && total > 0) ? total : exportTotalCount)
+      // 每 100 条或最后一条更新一次状态，减少 DOM 文本刷新
+      if (total ? (index % 100 === 1 || index === total) : (index % 100 === 1)) {
+        setStatus(total ? `导出中: ${index}/${total}` : `导出中: ${index} 条`)
+      }
     })
 
     window.electronAPI.onOfflineExportDone((summary) => {
@@ -666,8 +1284,11 @@
       elements.exportBtn.disabled = false
       setStatus(`完成: ${summary.count} 条`)
       appendLog(`导出完成: ${summary.count} 条`, 'system')
+      renderTableVirtual()
       updateSummary()
       renderChart()
+      applyExportProgress(summary.count, summary.count)  // 进度推到 100%
+      setTimeout(hideExportProgress, 800)
     })
 
     window.electronAPI.onMenuOfflineSave(() => saveCSV())

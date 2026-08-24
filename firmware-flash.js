@@ -8,6 +8,8 @@ let ESPLoader = null
 let UsbJtagSerialReset = null
 let esptoolReady = false
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 // 动态加载 esptool-js (ESM 模块)
 async function loadEsptool() {
   if (esptoolReady) return
@@ -109,30 +111,59 @@ async function flashFirmware(params, onProgress, onLog) {
       }
     })
 
-    // 复位设备（ESP_FLASH_END + reboot 标志，所有 stub 均支持）
+    // 复位设备
+    // 注意：ESP32-C3/S3 等内置 USB-JTAG-Serial 的芯片，flashFinish(reboot=1) 可能超时或收不到响应，
+    // 此时不能简单判定为“已复位”，应改用 USB 复位（DTR/RTS 时序）让芯片退出烧录模式、启动用户程序。
     onLog('正在复位设备...')
     onProgress(97, '正在复位设备...')
+
+    // 烧录完成后稍作等待，确保 stub 完成最后一次 flash 写入，避免复位时仍处于忙碌状态
+    await sleep(500)
+
+    let resetDone = false
+
+    // 方法1：通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启到用户程序
+    //   writeFlash 内部已调用 flashFinish(false) 退出烧录模式，此处再调用 flashFinish(true) 触发软重启
     try {
-      // 方法1：通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启到用户程序
-      //   writeFlash 内部已调用 flashFinish(false) 退出烧录模式，此处再调用 flashFinish(true) 触发软重启
       onLog('发送重启命令 (ESP_FLASH_END)...')
       await esploader.flashFinish(true, 5000)
+      resetDone = true
       onLog('设备已复位（软件复位）')
     } catch (e) {
-      // 如果芯片已重启，可能收不到响应，超时属正常
-      if (e.message && (e.message.includes('timeout') || e.message.includes('serial') || e.message.includes('no data'))) {
-        onLog('设备已复位（芯片重启中...）')
-      } else {
-        onLog(`软件复位失败: ${e.message}`)
-        // 方法2：降级使用 RTS 硬复位（适用于外部 USB-UART 如 CP2102 连接 EN 引脚）
-        try {
-          onLog('尝试 RTS 硬复位...')
-          await esploader.after('hard_reset', true)
-          onLog('设备已复位（RTS 硬复位）')
-        } catch (e2) {
-          onLog(`RTS 硬复位失败: ${e2.message}，请手动复位设备（按 EN 键或重新插拔 USB）`)
+      // 超时/串口中断不一定代表芯片已复位，可能只是通信中断，不能直接判定为“已复位”
+      onLog(`软件复位未确认: ${e.message}`)
+    }
+
+    // 方法2：USB-JTAG 串口复位（ESP32-C3/S3 内置 USB-JTAG-Serial 的推荐复位方式）
+    if (!resetDone) {
+      try {
+        if (UsbJtagSerialReset) {
+          onLog('尝试 USB-JTAG 串口复位 (DTR/RTS)...')
+          await new UsbJtagSerialReset(transport).reset()
+          resetDone = true
+          onLog('设备已复位（USB-JTAG 串口复位）')
+        } else {
+          onLog('UsbJtagSerialReset 不可用，跳过 USB 复位')
         }
+      } catch (e2) {
+        onLog(`USB-JTAG 串口复位失败: ${e2.message}`)
       }
+    }
+
+    // 方法3：降级使用 RTS 硬复位（适用于外部 USB-UART 如 CP2102 连接 EN 引脚）
+    if (!resetDone) {
+      try {
+        onLog('尝试 RTS 硬复位...')
+        await esploader.after('hard_reset', true)
+        resetDone = true
+        onLog('设备已复位（RTS 硬复位）')
+      } catch (e3) {
+        onLog(`RTS 硬复位失败: ${e3.message}`)
+      }
+    }
+
+    if (!resetDone) {
+      onLog('自动复位均未成功，请手动复位设备（按 EN 键或重新插拔 USB）')
     }
 
     onProgress(100, '✅ 烧录完成！')
@@ -196,24 +227,52 @@ async function eraseFlashChip(portPath, onProgress, onLog) {
 
     onLog('正在复位设备...')
     onProgress(90, '正在复位设备...')
+
+    // 擦除完成后稍作等待，避免复位时芯片仍处于忙碌状态
+    await sleep(500)
+
+    let resetDone = false
+
+    // 方法1：通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启
     try {
-      // 通过 ESP_FLASH_END 命令（reboot=1）告诉 stub 重启
       onLog('发送重启命令 (ESP_FLASH_END)...')
       await esploader.flashFinish(true, 5000)
+      resetDone = true
       onLog('设备已复位（软件复位）')
     } catch (e) {
-      if (e.message && (e.message.includes('timeout') || e.message.includes('serial') || e.message.includes('no data'))) {
-        onLog('设备已复位（芯片重启中...）')
-      } else {
-        onLog(`软件复位失败: ${e.message}`)
-        try {
-          onLog('尝试 RTS 硬复位...')
-          await esploader.after('hard_reset', true)
-          onLog('设备已复位（RTS 硬复位）')
-        } catch (e2) {
-          onLog(`RTS 硬复位失败: ${e2.message}，请手动复位设备（按 EN 键或重新插拔 USB）`)
+      onLog(`软件复位未确认: ${e.message}`)
+    }
+
+    // 方法2：USB-JTAG 串口复位（ESP32-C3/S3 内置 USB-JTAG-Serial 的推荐复位方式）
+    if (!resetDone) {
+      try {
+        if (UsbJtagSerialReset) {
+          onLog('尝试 USB-JTAG 串口复位 (DTR/RTS)...')
+          await new UsbJtagSerialReset(transport).reset()
+          resetDone = true
+          onLog('设备已复位（USB-JTAG 串口复位）')
+        } else {
+          onLog('UsbJtagSerialReset 不可用，跳过 USB 复位')
         }
+      } catch (e2) {
+        onLog(`USB-JTAG 串口复位失败: ${e2.message}`)
       }
+    }
+
+    // 方法3：降级使用 RTS 硬复位（适用于外部 USB-UART 如 CP2102 连接 EN 引脚）
+    if (!resetDone) {
+      try {
+        onLog('尝试 RTS 硬复位...')
+        await esploader.after('hard_reset', true)
+        resetDone = true
+        onLog('设备已复位（RTS 硬复位）')
+      } catch (e3) {
+        onLog(`RTS 硬复位失败: ${e3.message}`)
+      }
+    }
+
+    if (!resetDone) {
+      onLog('自动复位均未成功，请手动复位设备（按 EN 键或重新插拔 USB）')
     }
 
     onProgress(100, '✅ 擦除完成！')
