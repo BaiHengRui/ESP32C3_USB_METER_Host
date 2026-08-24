@@ -404,6 +404,16 @@
       overviewCache.power = pDec
     }
 
+    // 将每桶 {x, yMin, yMax} 展开为 min/max 两个点（同一 x 坐标构成垂直尖峰），桶内无波动时仅输出一点
+    function expandMinMax(dec) {
+      const out = []
+      for (const d of dec) {
+        out.push({ x: d.x, y: d.yMin })
+        if (d.yMax !== d.yMin) out.push({ x: d.x, y: d.yMax })
+      }
+      return out
+    }
+
     // 状态变量
     let isStreaming = false
     let streamInterval = null
@@ -670,11 +680,11 @@
       mainChart.data.datasets[4].data = chargeMAhPoints
       mainChart.data.datasets[5].data = energyMWhPoints
 
-      // ===== 总览视图数据：全量极值抽稀 =====
+      // ===== 总览视图数据：全量极值抽稀（min/max 双点展开，保留瞬时尖峰） =====
       rebuildOverviewCache()
-      overviewChart.data.datasets[0].data = overviewCache.voltage.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
-      overviewChart.data.datasets[1].data = overviewCache.current.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
-      overviewChart.data.datasets[2].data = overviewCache.power.map(d => ({ x: d.x, y: (d.yMin + d.yMax) / 2 }))
+      overviewChart.data.datasets[0].data = expandMinMax(overviewCache.voltage)
+      overviewChart.data.datasets[1].data = expandMinMax(overviewCache.current)
+      overviewChart.data.datasets[2].data = expandMinMax(overviewCache.power)
 
       // ===== 主视图 X 轴区间管理 =====
       if (autoFollow && isStreaming) {

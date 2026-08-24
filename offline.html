@@ -664,8 +664,12 @@
       if (series.t.length !== records.length) buildSeries()
     }
 
-    // 像素级极值抽稀：按可视区间与画布像素宽度分桶，返回每桶 {x, y(均值), yMin, yMax}
-    function decimateLine(timeArr, valArr, xMin, xMax, pixelWidth) {
+    // 像素级极值抽稀：按可视区间与画布像素宽度分桶。
+    // 像素级极值抽稀：按可视区间与画布像素宽度分桶。
+    // 每桶先统计 min/max/均值；仅当桶内极值差异明显超过容差（真实尖峰）时，
+    // 才输出 min/max 两个点构成垂直尖峰，否则输出单个均值点，避免 ADC 噪声把稳定段画成毛刺。
+    // peakRatio: 极值相对均值的容差比例；absFloor: 绝对容差下限（防止 0 附近相对阈值失效）
+    function decimateLine(timeArr, valArr, xMin, xMax, pixelWidth, peakRatio = 0.002, absFloor = 0.005) {
       if (!timeArr || timeArr.length === 0) return []
       const range = Math.max(1e-9, xMax - xMin)
       const binCount = Math.max(1, Math.min(pixelWidth, 4000))
@@ -692,7 +696,18 @@
       const result = []
       for (let b = 0; b < binCount; b++) {
         if (cnt[b] > 0) {
-          result.push({ x: xMin + (b + 0.5) * binWidth, y: sum[b] / cnt[b], yMin: mn[b], yMax: mx[b] })
+          const x = xMin + (b + 0.5) * binWidth
+          const avg = sum[b] / cnt[b]
+          const peakDev = mx[b] - mn[b]
+          const thr = Math.max(Math.abs(avg) * peakRatio, absFloor)
+          if (peakDev > thr) {
+            // 显著尖峰：min/max 双点构成垂直尖峰
+            result.push({ x, y: mn[b], yMin: mn[b], yMax: mx[b], yAvg: avg })
+            result.push({ x, y: mx[b], yMin: mn[b], yMax: mx[b], yAvg: avg })
+          } else {
+            // 平稳段：单均值点，避免噪声毛刺
+            result.push({ x, y: avg, yMin: avg, yMax: avg, yAvg: avg })
+          }
         }
       }
       return result
@@ -769,6 +784,10 @@
             callbacks: {
               title: function (context) {
                 return 'Time(s):' + context[0].parsed.x.toFixed(3)
+              },
+              // 直接显示悬停点的原始采样值（min/max 抽稀点即实际极值）
+              label: function (context) {
+                return ` ${context.dataset.label}: ${context.parsed.y.toFixed(4)}`
               }
             }
           }
@@ -805,19 +824,19 @@
       const binCount = Math.max(1, Math.min(Math.floor(pixelW), 4000))
 
       const fields = [
-        { arr: series.v, idx: 0, axis: 'y' },
-        { arr: series.c, idx: 1, axis: 'y1' },
-        { arr: series.p, idx: 2, axis: 'y2' },
-        { arr: series.temp, idx: 3, axis: null },
-        { arr: series.mah, idx: 4, axis: null },
-        { arr: series.mwh, idx: 5, axis: null }
+        { arr: series.v, idx: 0, axis: 'y', peakRatio: 0.002, absFloor: 0.005 },
+        { arr: series.c, idx: 1, axis: 'y1', peakRatio: 0.002, absFloor: 0.005 },
+        { arr: series.p, idx: 2, axis: 'y2', peakRatio: 0.002, absFloor: 0.005 },
+        { arr: series.temp, idx: 3, axis: null, peakRatio: 0.002, absFloor: 0.02 },
+        { arr: series.mah, idx: 4, axis: null, peakRatio: 0, absFloor: Infinity },  // 累加量：仅均值，避免阶梯毛刺
+        { arr: series.mwh, idx: 5, axis: null, peakRatio: 0, absFloor: Infinity }   // 累加量：仅均值
       ]
 
       const yExtents = { y: { min: Infinity, max: -Infinity }, y1: { min: Infinity, max: -Infinity }, y2: { min: Infinity, max: -Infinity } }
 
       fields.forEach(f => {
-        const dec = decimateLine(series.t, f.arr, xMin, xMax, binCount)
-        chart.data.datasets[f.idx].data = dec.map(d => ({ x: d.x, y: d.y }))
+        const dec = decimateLine(series.t, f.arr, xMin, xMax, binCount, f.peakRatio, f.absFloor)
+        chart.data.datasets[f.idx].data = dec.map(d => ({ x: d.x, y: d.y, yAvg: d.yAvg, yMin: d.yMin, yMax: d.yMax }))
         if (f.axis) {
           dec.forEach(d => {
             if (d.yMin < yExtents[f.axis].min) yExtents[f.axis].min = d.yMin
@@ -1271,7 +1290,8 @@
     window.electronAPI.onOfflineExportRecord(({ record, index, total }) => {
       if (firstRecordUs == null) firstRecordUs = record.espTimeUs
       records.push(record)
-      scheduleTableRender()
+      // 导出期间仅每 50 条触发一次表格渲染，避免海量记录时频繁调度 RAF
+      if (index % 50 === 0) scheduleTableRender()
       applyExportProgress(index, (total && total > 0) ? total : exportTotalCount)
       // 每 100 条或最后一条更新一次状态，减少 DOM 文本刷新
       if (total ? (index % 100 === 1 || index === total) : (index % 100 === 1)) {
