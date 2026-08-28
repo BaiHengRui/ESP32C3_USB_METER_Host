@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 窗口操作
   openCurveWindow: () => ipcRenderer.invoke('open-curve-window'),
-  openFirmwareWindow: () => ipcRenderer.invoke('open-firmware-window'),
+  openFirmwareWindow: (files) => ipcRenderer.invoke('open-firmware-window', files),
   openOfflineWindow: () => ipcRenderer.invoke('open-offline-window'),
 
   // 离线数据
@@ -172,6 +172,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openUpdateFolder: (filePath) => ipcRenderer.invoke('open-update-folder', filePath),
   openReleasePage: () => ipcRenderer.invoke('open-release-page'),
 
+  // 固件更新检查（对比设备 SW 版本与 GitHub 最新发布版本）
+  checkFirmwareUpdate: (currentVersion) => ipcRenderer.invoke('check-firmware-update', currentVersion),
+  downloadFirmwareUpdate: (params) => ipcRenderer.invoke('download-firmware-update', params),
+  openFirmwareReleasePage: (url) => ipcRenderer.invoke('open-firmware-release-page', url),
+
   // 事件监听
   onUpdateAvailable: (callback) => {
     const listener = (event, info) => callback(info)
@@ -192,6 +197,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (event, error) => callback(error)
     ipcRenderer.on('update-error', listener)
     return () => ipcRenderer.removeListener('update-error', listener)
+  },
+
+  onFirmwareUpdateResult: (callback) => {
+    const listener = (event, info) => callback(info)
+    ipcRenderer.on('firmware-update-result', listener)
+    return () => ipcRenderer.removeListener('firmware-update-result', listener)
+  },
+
+  onFirmwareDownloadProgress: (callback) => {
+    const listener = (event, progress) => callback(progress)
+    ipcRenderer.on('firmware-download-progress', listener)
+    return () => ipcRenderer.removeListener('firmware-download-progress', listener)
+  },
+
+  onFirmwareAutoFill: (callback) => {
+    const listener = (event, files) => callback(files)
+    ipcRenderer.on('firmware-auto-fill', listener)
+    return () => ipcRenderer.removeListener('firmware-auto-fill', listener)
   }
 })
 

@@ -66,6 +66,46 @@
     </div>
   </div>
 
+  <!-- 固件更新弹窗（复用更新弹窗样式） -->
+  <div id="firmwareUpdateOverlay" class="update-overlay" style="display: none;">
+    <div class="update-modal">
+      <button id="firmwareUpdateCloseBtn" class="update-close">&times;</button>
+
+      <div id="firmwareUpdateStateInfo" class="update-state">
+        <div class="update-header">
+          <svg class="update-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4l2 2"/>
+          </svg>
+          <div>
+            <div class="update-title">发现固件新版本 <span id="firmwareUpdateNewVersion">v--</span></div>
+            <div class="update-subtitle">当前固件 v<span id="firmwareUpdateCurrentVersion">--</span></div>
+          </div>
+        </div>
+        <div class="update-changelog" id="firmwareUpdateChangelog"></div>
+        <div class="update-actions">
+          <button id="firmwareUpdateGoBtn" class="update-btn update-btn-primary">立即更新</button>
+          <button id="firmwareUpdateViewBtn" class="update-btn update-btn-ghost">查看发布页</button>
+          <button id="firmwareUpdateDismissBtn" class="update-btn update-btn-ghost">稍后</button>
+        </div>
+      </div>
+
+      <div id="firmwareUpdateStateProgress" class="update-state" style="display: none;">
+        <div class="update-title">正在下载并准备固件...</div>
+        <div class="update-progress-bar-wrap">
+          <div class="update-progress-bar">
+            <div class="update-progress-fill" id="firmwareUpdateProgressFill"></div>
+          </div>
+          <span class="update-progress-text" id="firmwareUpdatePercent">0%</span>
+        </div>
+        <div class="update-progress-meta">
+          <span id="firmwareUpdateSpeed">--</span>
+          <span id="firmwareUpdateRemaining">--</span>
+          <span id="firmwareUpdateSizeInfo">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="container">
     <!-- 串口设置 -->
     <div class="card">

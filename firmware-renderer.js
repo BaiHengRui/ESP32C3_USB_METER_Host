@@ -46,6 +46,11 @@ async function init() {
   appendLog('初始化开始...')
   appendLog('烧录引擎: serialport')
 
+  // 提前注册自动填充监听，避免在 did-finish-load 时错过事件
+  window.electronAPI.onFirmwareAutoFill((files) => {
+    autoFillFirmwareFiles(files)
+  })
+
   setupEventListeners()
   initTheme()
   bindBrowseButtons()
@@ -192,6 +197,30 @@ function getPartitions() {
     if (fw && addr) partitions.push({ firmwareFile: fw, address: addr })
   })
   return partitions
+}
+
+// 自动填入已下载的固件文件路径
+function autoFillFirmwareFiles(files) {
+  if (!files) return
+  const entries = [
+    { key: 'bootloader', addr: '0x0000' },
+    { key: 'partitions', addr: '0x8000' },
+    { key: 'app', addr: '0x10000' }
+  ]
+  entries.forEach(({ key, addr }, index) => {
+    const filePath = files[key]
+    if (!filePath) return
+    let row = elements.partitionTableBody.querySelectorAll('tr')[index]
+    if (!row) {
+      addPartitionRow(addr)
+      row = elements.partitionTableBody.querySelectorAll('tr')[index]
+    }
+    const input = row.querySelector('.firmware-file')
+    const addrInput = row.querySelector('.partition-address')
+    if (input) input.value = filePath
+    if (addrInput) addrInput.value = addr
+  })
+  appendLog('已自动填入最新固件文件路径')
 }
 
 function setFlashingUI(flashing) {

@@ -1,8 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
-const { scheduleStartupCheck, checkForUpdatesManually, registerUpdateIPC } = require('./update')
+const { scheduleStartupCheck, checkForUpdatesManually, registerUpdateIPC, checkFirmwareUpdate, downloadFirmwareAssets } = require('./update')
 
 // 设置应用名称（影响任务管理器中主进程和子进程的显示名称）
 app.setName('meter host')
@@ -110,6 +110,7 @@ let offlineExport = {
 }
 
 // 固件更新相关
+let currentFirmwareVersion = null
 
 // 数据解析函数
 function parseUSBCDCData(data) {
@@ -686,9 +687,12 @@ function createCurveWindow() {
 }
 
 // 创建固件更新窗口
-function createFirmwareWindow() {
+function createFirmwareWindow(files = null) {
   if (firmwareWindow && !firmwareWindow.isDestroyed()) {
     firmwareWindow.focus()
+    if (files) {
+      firmwareWindow.webContents.send('firmware-auto-fill', files)
+    }
     return
   }
 
@@ -714,6 +718,9 @@ function createFirmwareWindow() {
   // 窗口加载完成后发送当前主题
   firmwareWindow.webContents.on('did-finish-load', () => {
     firmwareWindow.webContents.send('theme-changed', getCurrentTheme())
+    if (files) {
+      firmwareWindow.webContents.send('firmware-auto-fill', files)
+    }
   })
 
   // F12 打开当前窗口的控制台
@@ -1259,10 +1266,76 @@ ipcMain.handle('open-curve-window', async () => {
   return { success: true }
 })
 
-ipcMain.handle('open-firmware-window', async () => {
-  createFirmwareWindow()
+ipcMain.handle('open-firmware-window', async (event, files) => {
+  createFirmwareWindow(files)
   return { success: true }
 })
+
+// 下载最新固件压缩包并解压，返回 bin 文件路径
+ipcMain.handle('download-firmware-update', async (event, { hardware } = {}) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const onProgress = (p) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('firmware-download-progress', p)
+    }
+  }
+  try {
+    return await downloadFirmwareAssets({ hardware, onProgress })
+  } catch (err) {
+    console.error('[FIRMWARE] 下载固件失败:', err.message)
+    return { success: false, error: err.message }
+  }
+})
+
+// 打开固件发布页（默认打开最新 releases 页）
+ipcMain.handle('open-firmware-release-page', async (event, url) => {
+  shell.openExternal(url || 'https://github.com/BaiHengRui/ESP32C3_USB_METER/releases')
+  return { success: true }
+})
+
+// 固件更新检查：对比设备固件 SW 版本与 GitHub 最新发布版本
+ipcMain.handle('check-firmware-update', async (event, currentVersion) => {
+  if (currentVersion) {
+    currentFirmwareVersion = currentVersion
+  }
+  return runFirmwareUpdateCheck(currentVersion)
+})
+
+// 执行固件更新检查（返回结果；弹窗由渲染进程复用美化弹窗）
+async function runFirmwareUpdateCheck(currentVersion) {
+  addOperationLog('FIRMWARE', 'CHECK_UPDATE', `当前固件版本: ${currentVersion}`)
+  const info = await checkFirmwareUpdate(currentVersion)
+
+  if (!info || !info.hasUpdate) {
+    if (info && info.error) {
+      console.log(`[FIRMWARE] 固件更新检查: ${info.error}`)
+    }
+    return info || { hasUpdate: false }
+  }
+
+  console.log(`[FIRMWARE] 发现固件新版本 v${info.latestVersion}（当前 v${info.currentVersion}）`)
+  return info
+}
+
+// 手动检查固件更新（菜单栏触发）
+async function checkFirmwareUpdateManually() {
+  if (!currentFirmwareVersion) {
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    await dialog.showMessageBox(parent, {
+      type: 'info',
+      title: '固件更新',
+      message: '尚未获取到设备固件版本',
+      detail: '请先连接设备，程序会自动查询固件版本后再试。',
+      buttons: ['确定'],
+      noLink: true
+    })
+    return
+  }
+  const info = await runFirmwareUpdateCheck(currentFirmwareVersion)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('firmware-update-result', info)
+  }
+}
 
 ipcMain.handle('open-offline-window', async () => {
   createOfflineWindow()
@@ -1711,6 +1784,12 @@ function createMenu() {
           label: '检查更新',
           click: () => {
             checkForUpdatesManually()
+          }
+        },
+        {
+          label: '检查固件更新',
+          click: () => {
+            checkFirmwareUpdateManually()
           }
         },
         { type: 'separator' },

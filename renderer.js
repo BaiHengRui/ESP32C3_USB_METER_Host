@@ -6,6 +6,9 @@ let isConnected = false
 let logLines = []
 let waitingForInfo = false   // 是否正在等待 info 命令的响应
 let infoLineCount = 0        // 已收到的 info 响应行数
+let firmwareCheckedVersion = null  // 已检查过固件更新的 SW 版本（避免同一版本重复弹窗）
+let currentFirmwareHardware = null  // 设备 HW 型号（用于匹配 INA226/INA228 固件包）
+let currentFirmwareIna = null       // 设备 INA 型号（INA226/INA228，用于匹配固件包）
 
 // DOM 元素
 const elements = {
@@ -268,6 +271,26 @@ function setupIPCListeners() {
   window.electronAPI.onUpdateError((error) => {
     showUpdateError(error)
   })
+
+  window.electronAPI.onFirmwareUpdateResult((info) => {
+    if (info && info.hasUpdate) {
+      showFirmwareUpdatePanel(info)
+    } else {
+      alert('当前固件已是最新版本。')
+    }
+  })
+
+  window.electronAPI.onFirmwareDownloadProgress((p) => {
+    firmwareUpdateUI.stateInfo.style.display = 'none'
+    firmwareUpdateUI.stateProgress.style.display = 'flex'
+    firmwareUpdateUI.percent.textContent = `${p.percent}%`
+    firmwareUpdateUI.progressFill.style.width = `${p.percent}%`
+    firmwareUpdateUI.speed.textContent = p.speed || '--'
+    firmwareUpdateUI.remaining.textContent = p.remaining ? `剩余 ${p.remaining}` : ''
+    if (p.downloadedStr && p.totalStr) {
+      firmwareUpdateUI.sizeInfo.textContent = `${p.downloadedStr} / ${p.totalStr}`
+    }
+  })
 }
 
 // 切换串口状态
@@ -483,7 +506,9 @@ function parseInfoLine(line) {
   // 提取 HW: xxx
   let match = line.match(/^HW:\s*(.+)/)
   if (match) {
-    elements.devHW.textContent = match[1].trim()
+    const hw = match[1].trim()
+    currentFirmwareHardware = hw
+    elements.devHW.textContent = hw
     elements.deviceInfo.style.display = 'flex'
     return
   }
@@ -491,8 +516,22 @@ function parseInfoLine(line) {
   // 提取 SW: xxx
   match = line.match(/^SW:\s*(.+)/)
   if (match) {
-    elements.devSW.textContent = match[1].trim()
+    const sw = match[1].trim()
+    elements.devSW.textContent = sw
     elements.deviceInfo.style.display = 'flex'
+    maybeCheckFirmwareUpdate(sw)
+    return
+  }
+
+  // 提取 INA: 226X / 228X（用于匹配 INA226/INA228 固件包）
+  match = line.match(/^INA:\s*(.+)/)
+  if (match) {
+    const val = match[1].trim().toUpperCase()
+    if (val.includes('228')) {
+      currentFirmwareIna = 'INA228'
+    } else if (val.includes('226')) {
+      currentFirmwareIna = 'INA226'
+    }
     return
   }
 
@@ -533,6 +572,21 @@ function parseInfoLine(line) {
   }
 }
 
+// 检测到固件 SW 版本后，对比 GitHub 最新发布版本（有更新则弹美化弹窗）
+function maybeCheckFirmwareUpdate(swVersion) {
+  if (!swVersion) return
+  if (firmwareCheckedVersion === swVersion) return
+  firmwareCheckedVersion = swVersion
+
+  window.electronAPI.checkFirmwareUpdate(swVersion).then((info) => {
+    if (info && info.hasUpdate) {
+      showFirmwareUpdatePanel(info)
+    }
+  }).catch((err) => {
+    console.error('[FIRMWARE] 固件更新检查失败:', err)
+  })
+}
+
 // =============================================
 //  应用更新 UI 逻辑
 // =============================================
@@ -563,6 +617,25 @@ const updateUI = {
   completeTitle: document.getElementById('updateCompleteTitle'),
   completeSub: document.getElementById('updateCompleteSub'),
   completeActions: document.getElementById('updateCompleteActions')
+}
+
+// 固件更新弹窗（复用更新弹窗样式）
+const firmwareUpdateUI = {
+  overlay: document.getElementById('firmwareUpdateOverlay'),
+  closeBtn: document.getElementById('firmwareUpdateCloseBtn'),
+  goBtn: document.getElementById('firmwareUpdateGoBtn'),
+  viewBtn: document.getElementById('firmwareUpdateViewBtn'),
+  dismissBtn: document.getElementById('firmwareUpdateDismissBtn'),
+  newVersion: document.getElementById('firmwareUpdateNewVersion'),
+  currentVersion: document.getElementById('firmwareUpdateCurrentVersion'),
+  changelog: document.getElementById('firmwareUpdateChangelog'),
+  stateInfo: document.getElementById('firmwareUpdateStateInfo'),
+  stateProgress: document.getElementById('firmwareUpdateStateProgress'),
+  progressFill: document.getElementById('firmwareUpdateProgressFill'),
+  percent: document.getElementById('firmwareUpdatePercent'),
+  speed: document.getElementById('firmwareUpdateSpeed'),
+  remaining: document.getElementById('firmwareUpdateRemaining'),
+  sizeInfo: document.getElementById('firmwareUpdateSizeInfo')
 }
 
 let updateDownloading = false
@@ -620,6 +693,63 @@ function showOverlay() {
 function hideOverlay() {
   if (updateDownloading) return
   updateUI.overlay.style.display = 'none'
+}
+
+function showFirmwareUpdatePanel(info) {
+  firmwareUpdateUI.newVersion.textContent = `v${info.latestVersion}`
+  firmwareUpdateUI.currentVersion.textContent = info.currentVersion || '--'
+  firmwareUpdateUI.changelog.innerHTML = markdownToHTML(info.body)
+
+  firmwareUpdateUI.stateInfo.style.display = 'flex'
+  firmwareUpdateUI.stateProgress.style.display = 'none'
+  firmwareUpdateUI.closeBtn.style.display = 'block'
+  firmwareUpdateUI.overlay.style.display = 'flex'
+
+  firmwareUpdateUI.goBtn.onclick = async () => {
+    firmwareUpdateUI.stateInfo.style.display = 'none'
+    firmwareUpdateUI.stateProgress.style.display = 'flex'
+    firmwareUpdateUI.closeBtn.style.display = 'none'
+    firmwareUpdateUI.progressFill.style.width = '0%'
+    firmwareUpdateUI.percent.textContent = '0%'
+    firmwareUpdateUI.speed.textContent = '正在连接...'
+    firmwareUpdateUI.remaining.textContent = ''
+    firmwareUpdateUI.sizeInfo.textContent = ''
+
+    try {
+      const result = await window.electronAPI.downloadFirmwareUpdate({ hardware: currentFirmwareIna || currentFirmwareHardware })
+      if (result && result.success) {
+        hideFirmwareUpdateOverlay()
+        await window.electronAPI.openFirmwareWindow({
+          bootloader: result.bootloader,
+          partitions: result.partitions,
+          app: result.app
+        })
+      } else {
+        showFirmwareDownloadError((result && result.error) || '下载失败')
+      }
+    } catch (err) {
+      showFirmwareDownloadError(err.message || '下载失败')
+    }
+  }
+  firmwareUpdateUI.viewBtn.onclick = () => {
+    window.electronAPI.openFirmwareReleasePage(info.htmlUrl)
+  }
+  firmwareUpdateUI.dismissBtn.onclick = hideFirmwareUpdateOverlay
+  firmwareUpdateUI.closeBtn.onclick = hideFirmwareUpdateOverlay
+  firmwareUpdateUI.overlay.onclick = (e) => {
+    if (e.target === firmwareUpdateUI.overlay) hideFirmwareUpdateOverlay()
+  }
+}
+
+function showFirmwareDownloadError(msg) {
+  firmwareUpdateUI.stateProgress.style.display = 'none'
+  firmwareUpdateUI.stateInfo.style.display = 'flex'
+  firmwareUpdateUI.closeBtn.style.display = 'block'
+  alert(msg)
+}
+
+function hideFirmwareUpdateOverlay() {
+  firmwareUpdateUI.overlay.style.display = 'none'
 }
 
 function showUpdatePanel(info) {

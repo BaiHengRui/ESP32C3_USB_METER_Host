@@ -713,6 +713,11 @@ input[type="range"]::-webkit-slider-thumb {
   font-weight: 700;
 }
 
+#firmwareUpdateNewVersion {
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
 .update-subtitle {
   font-size: 12px;
   color: var(--text-secondary);
