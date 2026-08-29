@@ -54,6 +54,24 @@ async function httpsGet(url) {
   return response.json()
 }
 
+// 带镜像兜底的 GET：直连失败后依次尝试镜像（与在线使用说明一致）
+async function httpsGetWithFallback(url) {
+  const sources = [url]
+  for (const mirror of DOWNLOAD_MIRRORS) {
+    if (mirror) sources.push(`${mirror}/${url}`)
+  }
+  let lastError = null
+  for (const src of sources) {
+    try {
+      return await httpsGet(src)
+    } catch (err) {
+      lastError = err
+      console.warn(`[UPDATE] 请求失败 (${src}): ${err.message}`)
+    }
+  }
+  throw lastError
+}
+
 function downloadFile(url, destPath, onProgress) {
   return new Promise((resolve, reject) => {
     cancelDownload = false
@@ -279,7 +297,7 @@ async function fetchLatestRelease() {
   await diagnoseProxy()
 
   try {
-    const release = await httpsGet(GITHUB_API_LATEST)
+    const release = await httpsGetWithFallback(GITHUB_API_LATEST)
 
     if (!release) {
       console.log('[UPDATE] API 返回空')
@@ -329,7 +347,7 @@ async function fetchLatestFirmwareRelease() {
   console.log(`[UPDATE] 请求固件 API: ${FIRMWARE_API_LATEST}`)
 
   try {
-    const release = await httpsGet(FIRMWARE_API_LATEST)
+    const release = await httpsGetWithFallback(FIRMWARE_API_LATEST)
 
     if (!release) {
       console.log('[UPDATE] 固件 API 返回空')

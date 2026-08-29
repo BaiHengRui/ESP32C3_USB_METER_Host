@@ -177,6 +177,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadFirmwareUpdate: (params) => ipcRenderer.invoke('download-firmware-update', params),
   openFirmwareReleasePage: (url) => ipcRenderer.invoke('open-firmware-release-page', url),
 
+  // 在线使用说明
+  fetchManual: () => ipcRenderer.invoke('fetch-manual'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
   // 事件监听
   onUpdateAvailable: (callback) => {
     const listener = (event, info) => callback(info)

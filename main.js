@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, screen, Menu, nativeTheme, shell, net } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { SerialPort } = require('serialport')
@@ -95,6 +95,7 @@ let curveWindow = null
 let firmwareWindow = null
 let driverWindow = null
 let offlineWindow = null
+let manualWindow = null
 let serialPort = null
 let isReading = false
 let dataBuffer = Buffer.alloc(0)
@@ -523,6 +524,12 @@ function createOfflineWindow() {
             checkForUpdatesManually()
           }
         },
+        {
+          label: '使用说明',
+          click: () => {
+            createManualWindow()
+          }
+        },
         { type: 'separator' },
         {
           label: '关于',
@@ -769,6 +776,53 @@ function createDriverWindow() {
 
   driverWindow.on('closed', () => {
     driverWindow = null
+  })
+}
+
+// 创建使用说明窗口（在线拉取 GitHub 说明书并渲染）
+function createManualWindow() {
+  if (manualWindow && !manualWindow.isDestroyed()) {
+    manualWindow.focus()
+    return
+  }
+
+  manualWindow = new BrowserWindow({
+    width: 880,
+    height: 780,
+    minWidth: 560,
+    minHeight: 520,
+    title: '使用说明',
+    center: true,
+    resizable: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'build', 'icon.png')
+      : path.join(__dirname, 'build', 'icon.png'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
+  })
+
+  manualWindow.loadFile(path.join(__dirname, 'manual.html'))
+
+  manualWindow.webContents.on('did-finish-load', () => {
+    manualWindow.webContents.send('theme-changed', getCurrentTheme())
+  })
+
+  // F5 刷新（重新拉取），F12 开发者工具
+  manualWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F5') {
+      event.preventDefault()
+      manualWindow.webContents.reload()
+    } else if (input.key === 'F12') {
+      event.preventDefault()
+      manualWindow.webContents.toggleDevTools()
+    }
+  })
+
+  manualWindow.on('closed', () => {
+    manualWindow = null
   })
 }
 
@@ -1792,6 +1846,12 @@ function createMenu() {
             checkFirmwareUpdateManually()
           }
         },
+        {
+          label: '使用说明',
+          click: () => {
+            createManualWindow()
+          }
+        },
         { type: 'separator' },
         {
           label: '关于',
@@ -1922,6 +1982,55 @@ nativeTheme.on('updated', () => {
 //// IPC 处理
 ipcMain.handle('get-theme', () => {
   return getCurrentTheme()
+})
+
+// 在线使用说明（GitHub raw + 镜像兜底）
+const USER_MANUAL_RAW = 'https://raw.githubusercontent.com/BaiHengRui/ESP32C3_USB_METER_Host/main/USER_MANUAL.md'
+const USER_MANUAL_URLS = [
+  USER_MANUAL_RAW,
+  `https://ghproxy.net/${USER_MANUAL_RAW}`,
+  `https://moeyy.cn/gh-proxy/${USER_MANUAL_RAW}`
+]
+const USER_MANUAL_CACHE_FILE = path.join(app.getPath('userData'), 'manual-cache.md')
+
+async function fetchUserManual() {
+  let lastError = null
+  for (const url of USER_MANUAL_URLS) {
+    try {
+      const res = await net.fetch(url, { headers: { 'User-Agent': 'ESP32-Meter-Manual' } })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const text = await res.text()
+      if (!text || !text.trim()) throw new Error('空响应')
+      // 拉取成功则写入本地缓存，供离线兜底
+      try { fs.writeFileSync(USER_MANUAL_CACHE_FILE, text, 'utf8') } catch (e) { /* 忽略 */ }
+      return { success: true, markdown: text, fromCache: false }
+    } catch (err) {
+      lastError = err
+      console.warn(`[MANUAL] 拉取说明书失败 (${url}): ${err.message}`)
+    }
+  }
+  // 网络全部失败时尝试本地缓存
+  try {
+    if (fs.existsSync(USER_MANUAL_CACHE_FILE)) {
+      const cached = fs.readFileSync(USER_MANUAL_CACHE_FILE, 'utf8')
+      if (cached && cached.trim()) {
+        console.log('[MANUAL] 网络不可用，使用本地缓存')
+        return { success: true, markdown: cached, fromCache: true }
+      }
+    }
+  } catch (e) { /* 忽略 */ }
+  return { success: false, error: lastError ? lastError.message : '无法获取使用说明' }
+}
+
+ipcMain.handle('fetch-manual', async () => {
+  return fetchUserManual()
+})
+
+ipcMain.handle('open-external', async (event, url) => {
+  if (url && /^https?:\/\//i.test(url)) {
+    shell.openExternal(url)
+  }
+  return { success: true }
 })
 
 ipcMain.handle('get-last-port', () => {

@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>使用说明</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+      background: var(--bg-primary);
+    }
+    .manual-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 18px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      flex-shrink: 0;
+    }
+    .manual-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .manual-status {
+      flex: 1;
+      text-align: right;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .manual-center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      padding: 24px;
+      text-align: center;
+    }
+    .manual-spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid var(--border-color);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: manualSpin 0.8s linear infinite;
+    }
+    @keyframes manualSpin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .manual-btn {
+      padding: 8px 22px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .manual-btn:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+    .manual-error-title { color: var(--danger); font-weight: 600; }
+
+    .manual-body {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+    .manual-toc {
+      width: 240px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      padding: 14px 10px;
+    }
+    .manual-toc-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-primary);
+      padding: 0 8px 8px;
+      letter-spacing: 0.5px;
+    }
+    .toc-item {
+      display: block;
+      padding: 5px 8px;
+      font-size: 12.5px;
+      line-height: 1.4;
+      color: var(--text-secondary);
+      text-decoration: none;
+      border-radius: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    .toc-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+    .toc-item.active { background: var(--bg-tertiary); color: var(--accent-blue); }
+    .toc-level-2 { font-weight: 600; margin-top: 6px; color: var(--text-primary); }
+    .toc-level-3 { padding-left: 20px; }
+    .manual-toc::-webkit-scrollbar { width: 5px; }
+    .manual-toc::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+
+    .manual-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 40px 48px;
+      line-height: 1.8;
+    }
+    .manual-content h1 {
+      font-size: 22px;
+      color: var(--text-primary);
+      margin: 8px 0 16px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--border-color);
+    }
+    .manual-content h2 {
+      font-size: 18px;
+      color: var(--text-primary);
+      margin: 28px 0 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .manual-content h3 {
+      font-size: 15px;
+      color: var(--text-primary);
+      margin: 20px 0 10px;
+    }
+    .manual-content h4 {
+      font-size: 14px;
+      color: var(--text-primary);
+      margin: 16px 0 8px;
+    }
+    .manual-content p { margin: 8px 0; color: var(--text-secondary); }
+    .manual-content ul, .manual-content ol {
+      margin: 8px 0 8px 24px;
+      color: var(--text-secondary);
+    }
+    .manual-content li { margin: 4px 0; }
+    .manual-content blockquote {
+      border-left: 3px solid var(--accent-blue);
+      background: var(--bg-tertiary);
+      margin: 12px 0;
+      padding: 8px 14px;
+      border-radius: 0 6px 6px 0;
+      color: var(--text-secondary);
+    }
+    .manual-content blockquote p { margin: 4px 0; }
+    .manual-content code {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--accent-orange);
+    }
+    .manual-content pre {
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 12px 0;
+      overflow-x: auto;
+    }
+    .manual-content pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: 12.5px;
+      line-height: 1.6;
+      white-space: pre;
+      color: var(--text-primary);
+    }
+    .manual-content a { color: var(--accent-blue); text-decoration: none; }
+    .manual-content a:hover { text-decoration: underline; }
+    .manual-content hr {
+      border: none;
+      border-top: 1px solid var(--border-color);
+      margin: 16px 0;
+    }
+    .manual-content table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .manual-content th, .manual-content td {
+      border: 1px solid var(--border-color);
+      padding: 8px 10px;
+      text-align: left;
+      color: var(--text-secondary);
+    }
+    .manual-content th {
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .manual-content tr:nth-child(even) td { background: var(--bg-tertiary); }
+    .manual-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border-color);
+      display: block;
+      margin: 12px auto;
+    }
+    .manual-content::-webkit-scrollbar { width: 8px; }
+    .manual-content::-webkit-scrollbar-thumb {
+      background: var(--border-color);
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="manual-toolbar">
+    <span class="manual-title">使用说明</span>
+    <span class="manual-status" id="status">正在加载…</span>
+  </div>
+
+  <div class="manual-center" id="loading">
+    <div class="manual-spinner"></div>
+    <div>正在从云端加载使用说明…</div>
+  </div>
+
+  <div class="manual-center" id="error" style="display: none;">
+    <div class="manual-error-title">加载失败</div>
+    <div id="errorMsg"></div>
+    <button class="manual-btn" id="retryBtn">重试</button>
+  </div>
+
+  <div class="manual-body" id="manualBody" style="display: none;">
+    <aside class="manual-toc">
+      <div class="manual-toc-title">目录</div>
+      <nav id="toc"></nav>
+    </aside>
+    <div class="manual-content" id="content"></div>
+  </div>
+
+  <script>
+    const RAW_BASE = 'https://raw.githubusercontent.com/BaiHengRui/ESP32C3_USB_METER_Host/main'
+
+    // ===== 主题 =====
+    function applyTheme(theme) {
+      document.body.classList.remove('theme-light', 'theme-dark')
+      document.body.classList.add('theme-' + theme)
+    }
+    window.electronAPI.getTheme().then(applyTheme)
+    window.electronAPI.onThemeChanged(applyTheme)
+
+    // ===== Markdown 渲染 =====
+    function slugify(text) {
+      return text
+        .replace(/[*_`]/g, '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^\w\u4e00-\u9fa5-]/g, '')
+    }
+
+    function isTableSeparator(line) {
+      const t = line.trim()
+      return /^[\s|:\-]+$/.test(t) && t.includes('-') && t.includes('|')
+    }
+
+    // 仅允许锚点与 http/https 链接，其余（如 javascript:）一律丢弃，防 XSS
+    function safeUrl(url) {
+      url = (url || '').trim()
+      if (url.startsWith('#')) return url
+      if (/^https?:\/\//i.test(url)) return url
+      return ''
+    }
+
+    // 属性值转义（& < > 已在前置步骤转义，此处只需转义引号）
+    function escAttr(s) {
+      return s.replace(/"/g, '&quot;')
+    }
+
+    function inline(text) {
+      let html = text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+      // 行内代码先抽离为占位符，避免其中的 ** / []() 被误解析
+      const codeTokens = []
+      html = html.replace(/`([^`]+)`/g, (m, code) => {
+        codeTokens.push(code)
+        return '\u0000C' + (codeTokens.length - 1) + '\u0000'
+      })
+
+      // 图片
+      html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, src) => {
+        const url = safeUrl(src)
+        if (!url || url.startsWith('#')) return ''
+        return '<img src="' + escAttr(url) + '" alt="' + escAttr(alt) + '" loading="lazy">'
+      })
+
+      // 链接
+      html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, label, href) => {
+        const url = safeUrl(href)
+        if (!url) return label
+        return '<a href="' + escAttr(url) + '">' + label + '</a>'
+      })
+
+      // 粗体
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+
+      // 还原行内代码
+      html = html.replace(/\u0000C(\d+)\u0000/g, (m, idx) => '<code>' + codeTokens[+idx] + '</code>')
+
+      return html
+    }
+
+    function renderTable(rows) {
+      const parseRow = (r) => r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim())
+      const parsed = rows.map(parseRow).filter((r) => !isTableSeparator(r.join('|')))
+      if (parsed.length === 0) return ''
+      const head = parsed[0]
+      const body = parsed.slice(1)
+      let html = '<table><thead><tr>' + head.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr></thead><tbody>'
+      html += body.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('')
+      html += '</tbody></table>'
+      return html
+    }
+
+    function renderMarkdown(md) {
+      if (!md) return '<p>暂无内容</p>'
+
+      // 相对图片路径重写为 GitHub raw 绝对地址
+      md = md.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, src) => {
+        src = src.trim()
+        if (/^https?:\/\//i.test(src) || src.startsWith('#')) return m
+        return '![' + alt + '](' + RAW_BASE + '/' + encodeURI(src.replace(/^\.\//, '')) + ')'
+      })
+
+      const lines = md.replace(/\r\n/g, '\n').split('\n')
+      let html = ''
+      let i = 0
+      while (i < lines.length) {
+        const line = lines[i]
+        if (!line.trim()) { i++; continue }
+
+        // 围栏代码块
+        if (/^\s*```/.test(line)) {
+          const lang = (line.match(/^\s*```([\w+-]*)/) || [])[1] || ''
+          const code = []
+          i++
+          while (i < lines.length && !/^\s*```/.test(lines[i])) {
+            code.push(lines[i])
+            i++
+          }
+          if (i < lines.length) i++ // 跳过结束围栏
+          const codeHtml = code.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          html += '<pre><code' + (lang ? ' class="language-' + lang + '"' : '') + '>' + codeHtml + '</code></pre>'
+          continue
+        }
+
+        // 水平分割线
+        if (/^\s*---+\s*$/.test(line)) { html += '<hr>'; i++; continue }
+
+        // 标题
+        const h = line.match(/^(#{1,4})\s+(.*)$/)
+        if (h) {
+          const level = h[1].length
+          const text = h[2].trim()
+          html += '<h' + level + ' id="' + slugify(text) + '">' + inline(text) + '</h' + level + '>'
+          i++; continue
+        }
+
+        // 引用块
+        if (/^\s*>/.test(line)) {
+          const content = []
+          while (i < lines.length && /^\s*>/.test(lines[i])) {
+            content.push(lines[i].replace(/^\s*>\s?/, ''))
+            i++
+          }
+          html += '<blockquote>' + renderMarkdown(content.join('\n').trim()) + '</blockquote>'
+          continue
+        }
+
+        // 表格
+        if (/^\s*\|/.test(line) && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+          const rows = []
+          while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(lines[i]); i++ }
+          html += renderTable(rows)
+          continue
+        }
+
+        // 无序列表
+        if (/^\s*[-*]\s+/.test(line)) {
+          const items = []
+          while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+            items.push(lines[i].replace(/^\s*[-*]\s+/, ''))
+            i++
+          }
+          html += '<ul>' + items.map((it) => '<li>' + inline(it) + '</li>').join('') + '</ul>'
+          continue
+        }
+
+        // 有序列表
+        if (/^\s*\d+\.\s+/.test(line)) {
+          const items = []
+          let start = null
+          while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+            const m = lines[i].match(/^\s*(\d+)\.\s+(.*)$/)
+            if (start === null) start = parseInt(m[1], 10)
+            items.push(m[2])
+            i++
+          }
+          html += '<ol start="' + start + '">' + items.map((it) => '<li>' + inline(it) + '</li>').join('') + '</ol>'
+          continue
+        }
+
+        // 段落：单个换行视为软换行（合并为空格），空行才分段
+        const para = []
+        while (
+          i < lines.length && lines[i].trim() &&
+          !/^\s*```/.test(lines[i]) &&
+          !/^(#{1,4})\s/.test(lines[i]) &&
+          !/^\s*---+\s*$/.test(lines[i]) &&
+          !/^\s*>/.test(lines[i]) &&
+          !/^\s*\|/.test(lines[i]) &&
+          !/^\s*[-*]\s+/.test(lines[i]) &&
+          !/^\s*\d+\.\s+/.test(lines[i])
+        ) {
+          para.push(lines[i])
+          i++
+        }
+        html += '<p>' + para.map(inline).join(' ') + '</p>'
+      }
+      return html
+    }
+
+    // ===== 加载与状态 =====
+    const loadingEl = document.getElementById('loading')
+    const errorEl = document.getElementById('error')
+    const manualBodyEl = document.getElementById('manualBody')
+    const contentEl = document.getElementById('content')
+    const tocEl = document.getElementById('toc')
+    const statusEl = document.getElementById('status')
+    const errorMsgEl = document.getElementById('errorMsg')
+
+    function setState(state) {
+      loadingEl.style.display = state === 'loading' ? 'flex' : 'none'
+      errorEl.style.display = state === 'error' ? 'flex' : 'none'
+      manualBodyEl.style.display = state === 'done' ? 'flex' : 'none'
+    }
+
+    function showError(msg) {
+      errorMsgEl.textContent = msg || '无法获取使用说明'
+      statusEl.textContent = '加载失败'
+      setState('error')
+    }
+
+    // ===== 目录与锚点跳转 =====
+    function buildToc() {
+      tocEl.innerHTML = ''
+      const headings = contentEl.querySelectorAll('h2, h3')
+      headings.forEach((h) => {
+        if (!h.id) h.id = slugify(h.textContent)
+        const item = document.createElement('a')
+        item.href = '#' + h.id
+        item.textContent = h.textContent
+        item.className = 'toc-item toc-level-' + h.tagName[1]
+        item.addEventListener('click', (e) => {
+          e.preventDefault()
+          scrollToHeading(h.id)
+        })
+        tocEl.appendChild(item)
+      })
+    }
+
+    function scrollToHeading(id) {
+      const el = document.getElementById(id)
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setActiveToc(id)
+      if (location.hash !== '#' + id) {
+        history.replaceState(null, '', '#' + id)
+      }
+    }
+
+    function setActiveToc(id) {
+      tocEl.querySelectorAll('.toc-item').forEach((it) => {
+        it.classList.toggle('active', it.getAttribute('href') === '#' + id)
+      })
+    }
+
+    let spyHandler = null
+    function setupScrollSpy() {
+      if (spyHandler) contentEl.removeEventListener('scroll', spyHandler)
+      const headings = Array.from(contentEl.querySelectorAll('h2, h3'))
+      spyHandler = () => {
+        const top = contentEl.getBoundingClientRect().top + 16
+        let current = headings.length ? headings[0].id : null
+        for (const h of headings) {
+          if (h.getBoundingClientRect().top <= top) current = h.id
+          else break
+        }
+        if (current) setActiveToc(current)
+      }
+      contentEl.addEventListener('scroll', spyHandler)
+    }
+
+    async function loadManual() {
+      setState('loading')
+      statusEl.textContent = '正在加载…'
+      try {
+        const result = await window.electronAPI.fetchManual()
+        if (result && result.success) {
+          contentEl.innerHTML = renderMarkdown(result.markdown)
+          buildToc()
+          setupScrollSpy()
+          statusEl.textContent = result.fromCache ? '已加载本地缓存（离线）' : '加载完成'
+          setState('done')
+          const hash = location.hash
+          if (hash && hash.length > 1) {
+            setTimeout(() => scrollToHeading(decodeURIComponent(hash.slice(1))), 50)
+          }
+        } else {
+          showError((result && result.error) || '无法获取使用说明')
+        }
+      } catch (err) {
+        showError(err.message || '无法获取使用说明')
+      }
+    }
+
+    document.getElementById('retryBtn').addEventListener('click', loadManual)
+
+    // 链接点击：外链用系统浏览器，锚点平滑滚动
+    contentEl.addEventListener('click', (e) => {
+      const a = e.target.closest('a')
+      if (!a) return
+      const href = a.getAttribute('href') || ''
+      if (/^https?:\/\//i.test(href)) {
+        e.preventDefault()
+        window.electronAPI.openExternal(href)
+      } else if (href.startsWith('#')) {
+        e.preventDefault()
+        scrollToHeading(href.slice(1))
+      }
+    })
+
+    // 图片加载失败时隐藏（error 事件不冒泡，需捕获阶段监听）
+    contentEl.addEventListener('error', (e) => {
+      if (e.target && e.target.tagName === 'IMG') {
+        e.target.style.display = 'none'
+      }
+    }, true)
+
+    loadManual()
+  </script>
+</body>
+</html>
